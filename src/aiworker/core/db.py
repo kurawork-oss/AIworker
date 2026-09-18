@@ -456,11 +456,18 @@ def update_job(conn: sqlite3.Connection, job_id: int, **fields: Any) -> None:
 def published_timestamps(
     conn: sqlite3.Connection, platform: str, account: str, *, since_iso: str
 ) -> list[str]:
+    """Timestamps of slots that have been spent.
+
+    STAGED counts as well as DONE. A staged item has had its posting slot
+    allocated and a file written for a person to post; releasing the slot
+    because nobody has confirmed yet would let the next run schedule over it.
+    Over-counting a slot costs one post; under-counting it costs an account.
+    """
     rows = conn.execute(
         "SELECT published_at FROM publish_jobs WHERE platform=? AND account=? "
-        "AND status=? AND published_at IS NOT NULL AND published_at >= ? "
+        "AND status IN (?,?) AND published_at IS NOT NULL AND published_at >= ? "
         "ORDER BY published_at",
-        (platform, account, JobStatus.DONE.value, since_iso),
+        (platform, account, JobStatus.DONE.value, JobStatus.STAGED.value, since_iso),
     ).fetchall()
     return [r["published_at"] for r in rows]
 
@@ -539,3 +546,12 @@ def revenue_between(conn: sqlite3.Connection, start: str, end: str) -> list[sqli
     return conn.execute(
         "SELECT * FROM revenue WHERE date >= ? AND date <= ? ORDER BY date", (start, end)
     ).fetchall()
+
+
+def staged_jobs(conn: sqlite3.Connection, *, limit: int = 100) -> list[PublishJob]:
+    """Jobs whose content is written to the outbox and waiting on a person."""
+    rows = conn.execute(
+        "SELECT * FROM publish_jobs WHERE status=? ORDER BY published_at LIMIT ?",
+        (JobStatus.STAGED.value, limit),
+    ).fetchall()
+    return [_row_to_job(r) for r in rows]

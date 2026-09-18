@@ -268,3 +268,57 @@ def test_ui_refuses_to_bind_publicly():
 
 def test_healthz(client):
     assert client.get("/healthz").json()["ok"] is True
+
+
+# ---- the manual-posting worklist ------------------------------------------
+def _stage_one_via_ui(client) -> None:
+    """Approve, schedule and publish one item with the manual publisher, so a
+    staged item exists to test the outbox against."""
+    from aiworker.approval import service as approval
+    from aiworker.core import clock, db
+    from aiworker.core.config import load_settings
+    from aiworker.notify.notifier import Notifier
+    from aiworker.scheduler import planner
+
+    settings = load_settings(CFG_PATH[0])
+    settings.platforms["x"].publisher = "manual"
+    conn = db.init_db(settings.db_path)
+    approval.approve(conn, settings, 1, actor="pytest")
+    plan = planner.plan(conn, settings)
+    planner.run_due(conn, settings, Notifier(settings.notify),
+                    now=clock.parse_iso(plan.scheduled[0].job.scheduled_at))
+    conn.close()
+
+
+def test_outbox_is_empty_when_nothing_is_staged(client):
+    assert "手動投稿待ちはありません" in client.get("/outbox").text
+
+
+def test_outbox_lists_staged_items_with_the_full_body(client):
+    _stage_one_via_ui(client)
+    text = client.get("/outbox").text
+    assert "投稿待ち" in text
+    assert "投稿した" in text, "the worklist needs a way to close the loop"
+
+
+def test_confirming_from_the_outbox_clears_it(client):
+    _stage_one_via_ui(client)
+    r = client.post("/item/1/posted", data={"url": "https://example.invalid/1"},
+                    follow_redirects=True)
+    assert "記録しました" in r.text
+    assert "手動投稿待ちはありません" in client.get("/outbox").text
+
+
+def test_outbox_command_lists_and_points_at_the_next_step(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("AIWORKER_ACTOR", "pytest")
+    assert run(tmp_path, "outbox") == 0
+    assert "手動投稿待ちはありません" in capsys.readouterr().out
+
+
+def test_outbox_offers_a_copy_button(client):
+    """Copying the body is the whole job of this screen; hand-selecting a few
+    hundred characters on a phone is not a workflow."""
+    _stage_one_via_ui(client)
+    text = client.get("/outbox").text
+    assert "本文をコピー" in text
+    assert "data-copy=" in text

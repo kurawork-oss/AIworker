@@ -447,3 +447,73 @@ def settings_view(conn: sqlite3.Connection, settings: Settings, halts: list) -> 
   <p class="muted" style="margin-top:10px">
     値の変更は config/config.yaml を編集してください。この画面からは変更できません。</p>
 </div>"""
+
+
+# --------------------------------------------------------------------------
+# outbox -- the manual-posting worklist
+# --------------------------------------------------------------------------
+def outbox_view(conn: sqlite3.Connection, settings: Settings) -> str:
+    """What a person still has to post by hand.
+
+    With `publisher: manual` -- the shipped default -- this is the only screen
+    that answers "what do I actually have to do now". The posting slot is
+    already spent, so nothing here is urgent for the quota; it is outstanding
+    for the *record*, and an unconfirmed item means the reach numbers later
+    will not line up with what went out.
+    """
+    jobs = db.staged_jobs(conn, limit=100)
+    if not jobs:
+        return ('<div class="card empty">手動投稿待ちはありません 🎉<br>'
+                '<span class="muted">承認して枠が来ると、ここに下書きが並びます。</span></div>')
+
+    cards = [f'<div class="section" style="margin-top:4px">投稿待ち · {len(jobs)}件</div>']
+    for job in jobs:
+        item = db.get_item(conn, job.content_id)
+        if item is None:
+            continue
+        when = clock.fmt_local(clock.parse_iso(job.published_at or job.scheduled_at),
+                               settings.timezone, "%m/%d %H:%M")
+        cards.append(f"""<article class="card">
+  <div class="row wrap">{badges(item)}</div>
+  <h3 style="margin:9px 0 3px">{e(item.title or item.uid)}</h3>
+  <div class="muted">{e(channel_label(item.channel))} · {e(item.platform)} · 出力 {when}</div>
+  <pre id="body-{item.id}" style="margin-top:10px">{e(item.body)}</pre>
+  <div class="copybar">
+    <button type="button" class="brand" data-copy="body-{item.id}">本文をコピー</button>
+    <span class="said" hidden>コピーしました</span>
+  </div>
+  <form class="action-block" method="post" action="/item/{item.id}/posted"
+        style="margin-top:12px">
+    <label class="field"><span>投稿したURL（任意・あとで実績と突き合わせるため）</span>
+      <input type="text" name="url" placeholder="https://..."></label>
+    <button class="approve" type="submit">投稿した</button>
+  </form>
+</article>""")
+    cards.append('<div class="card"><p class="muted">本文をコピーして各プラットフォームに'
+                 '投稿し、「投稿した」を押してください。ファイルは '
+                 '<code>var/outbox/</code> にも出力されています。</p></div>')
+    # The whole job of this screen is "copy this, paste it there". Hand-selecting
+    # a few hundred characters of Japanese on a phone is the one place where a
+    # few lines of script earn their keep; everything else stays server-rendered.
+    cards.append("""<script>
+document.addEventListener("click", function (ev) {
+  var btn = ev.target.closest("[data-copy]");
+  if (!btn) return;
+  var el = document.getElementById(btn.dataset.copy);
+  if (!el) return;
+  var said = btn.parentNode.querySelector(".said");
+  var done = function () { if (said) { said.hidden = false;
+    setTimeout(function () { said.hidden = true; }, 2000); } };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(el.innerText).then(done, fallback);
+  } else { fallback(); }
+  function fallback() {
+    // Older browsers and insecure origins: select the text so one tap on
+    // "copy" in the OS menu finishes the job.
+    var r = document.createRange(); r.selectNodeContents(el);
+    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    try { document.execCommand("copy"); done(); } catch (e) { /* selected anyway */ }
+  }
+});
+</script>""")
+    return "".join(cards)

@@ -243,6 +243,9 @@ svg.chart{display:block;width:100%;height:auto;overflow:visible}
 pre{white-space:pre-wrap;word-break:break-word;margin:0;
   font:12px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink-2)}
 .halt{background:var(--critical);color:#fff;padding:9px 14px;font-size:13px;font-weight:700}
+.copybar{display:flex;gap:8px;align-items:center;margin-top:10px}
+.copybar button{width:auto;flex:none}
+.copybar .said{font-size:12px;color:var(--good);font-weight:700}
 .toast{background:var(--raise);border:1px solid var(--line);border-left:3px solid var(--brand);
   border-radius:10px;padding:11px 13px;margin-bottom:12px;font-size:14px;font-weight:700}
 """

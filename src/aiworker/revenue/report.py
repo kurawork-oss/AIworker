@@ -113,6 +113,7 @@ def ops_report(conn: sqlite3.Connection, settings: Settings, *, days: int = 7) -
         (Status.NEEDS_REVISION.value, "修正依頼中"),
         (Status.APPROVED.value, "承認済(未スケジュール)"),
         (Status.SCHEDULED.value, "スケジュール済"),
+        (Status.STAGED.value, "手動投稿待ち"),
         (Status.PUBLISHED.value, "公開済(累計)"),
         (Status.FAILED.value, "失敗"),
         (Status.REJECTED.value, "却下(累計)"),
@@ -179,6 +180,8 @@ def ops_report(conn: sqlite3.Connection, settings: Settings, *, days: int = 7) -
         todo.append(f"ブロック {counts[Status.BLOCKED.value]} 件の判断: aiworker review list --status blocked")
     if counts.get(Status.APPROVED.value):
         todo.append(f"承認済 {counts[Status.APPROVED.value]} 件のスケジュール: aiworker plan")
+    if counts.get(Status.STAGED.value):
+        todo.append(f"手動投稿待ち {counts[Status.STAGED.value]} 件を投稿して記録: aiworker outbox")
     if halts:
         todo.append("停止中の系統を確認し、原因解消後に aiworker resume")
     if not todo:

@@ -33,6 +33,11 @@ class Publisher(Protocol):
     name: str
     #: False for adapters that only stage content for a human to post.
     performs_network_io: bool
+    #: True when `publish()` only prepares the content and a person still has
+    #: to post it. The runner then parks the job in STAGED rather than calling
+    #: it published, so the operator keeps a worklist and the dashboard does
+    #: not claim something went out that has not.
+    stages_for_human: bool
 
     def publish(self, item: ContentItem) -> PublishResult:
         ...

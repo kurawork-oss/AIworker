@@ -28,6 +28,7 @@ log = get_logger("publish")
 class DryRunPublisher:
     name = "dryrun"
     performs_network_io = False
+    stages_for_human = False
 
     def publish(self, item: ContentItem) -> PublishResult:
         log.info("[dry-run] would publish %s to %s", item.uid, item.platform,
@@ -43,6 +44,7 @@ class ManualPublisher:
 
     name = "manual"
     performs_network_io = False
+    stages_for_human = True
 
     def __init__(self, outbox: Path, timezone: str = "UTC"):
         self.outbox = Path(outbox)

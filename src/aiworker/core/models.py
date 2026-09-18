@@ -20,6 +20,7 @@ class Status(str, Enum):
     REJECTED = "rejected"               # human said no
     APPROVED = "approved"               # human said yes, not yet scheduled
     SCHEDULED = "scheduled"             # has a publish job with a future slot
+    STAGED = "staged"                   # written to the outbox, waiting for a human to post it
     PUBLISHED = "published"
     FAILED = "failed"                   # publishing exhausted its retries
 
@@ -43,6 +44,10 @@ class JobStatus(str, Enum):
     QUEUED = "queued"
     BLOCKED = "blocked"
     RUNNING = "running"
+    #: The publisher only prepared the content; a person still has to post it.
+    #: The posting slot is spent either way, so this counts against the quota
+    #: exactly like DONE -- see `db.published_timestamps`.
+    STAGED = "staged"
     DONE = "done"
     FAILED = "failed"
     CANCELLED = "cancelled"

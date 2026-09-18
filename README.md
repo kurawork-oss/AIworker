@@ -48,7 +48,8 @@ APIキーは不要です（既定の `mock` プロバイダはオフラインで
 | **上限管理** | 日次/週次上限・最小投稿間隔・活動時間帯。予約済みの枠も消化として計上 |
 | **時刻分散** | ランダムな投稿枠。固定パターンは自動化の指紋になるため |
 | **承認ゲート** | CLI または Web UI。承認・却下・修正依頼・編集（編集は承認を引き継がない） |
-| **承認UI** | スマホアプリ形式。リスト / フロー / スワイプ / 対話 の4つの作業画面＋レポート＋設定 |
+| **承認UI** | スマホアプリ形式。リスト / フロー / スワイプ / 対話 ＋ 投稿待ち ＋ レポート ＋ 設定 |
+| **手動投稿の追跡** | 下書き出力は「公開済」にせず「手動投稿待ち」として残す。投稿枠は出力時点で消費 |
 | **異常検知** | 連続失敗・警告文言・リーチ急減・上限接近。前2つは自動停止 |
 | **緊急停止** | DBフラグ + STOPファイルの二重化。自動解除はしない |
 | **収益集計** | CSV取込（日本語列名・Shift-JIS対応）・ソース別集計・集中度警告 |
@@ -66,7 +67,8 @@ aiworker review approve 12
 aiworker review revise 12 --note "冒頭を具体的に"
 aiworker plan                  # 投稿枠の割当
 aiworker publish               # 枠が来たジョブの実行
-aiworker mark-published <uid> --url ...   # 手動投稿の記録（上限計算に必要）
+aiworker outbox                # 手動投稿待ちの一覧（manual運用の作業リスト）
+aiworker mark-published <uid> --url ...   # 投稿した事実とURLを記録
 aiworker status                # 現在の状態
 aiworker report --days 7       # 運用・収益レポート
 aiworker revenue import a8.csv --source a8

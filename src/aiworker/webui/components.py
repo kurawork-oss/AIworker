@@ -24,10 +24,12 @@ STATUS_LABELS = {
     Status.APPROVED.value: "承認済",
     Status.REJECTED.value: "却下",
     Status.SCHEDULED.value: "予約済",
+    Status.STAGED.value: "手動投稿待ち",
     Status.PUBLISHED.value: "公開済",
     Status.FAILED.value: "失敗",
 }
 STATUS_TONE = {
+    Status.STAGED.value: "warn",
     Status.BLOCKED.value: "bad",
     Status.FAILED.value: "bad",
     Status.NEEDS_REVISION.value: "warn",
@@ -55,6 +57,7 @@ ICONS = {
 
 TABS = [
     ("tasks", "/", "タスク"),
+    ("outbox", "/outbox", "投稿待ち"),
     ("reports", "/reports", "レポート"),
     ("settings", "/settings", "設定"),
 ]

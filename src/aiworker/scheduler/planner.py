@@ -229,14 +229,21 @@ def run_due(conn: sqlite3.Connection, settings: Settings, notifier: Notifier, *,
         result = with_retry(lambda: publisher.publish(item), **kwargs)
 
         if result.ok:
+            # A publisher that only prepares content has not published anything.
+            # The slot is spent (so the quota still counts it), but the item
+            # waits in STAGED until a person confirms they posted it.
+            staged = getattr(publisher, "stages_for_human", False)
+            job_status = JobStatus.STAGED.value if staged else JobStatus.DONE.value
+            item_status = Status.STAGED if staged else Status.PUBLISHED
             with db.transaction(conn):
-                db.update_job(conn, job.id, status=JobStatus.DONE.value,
+                db.update_job(conn, job.id, status=job_status,
                               external_id=result.external_id,
                               external_url=result.external_url,
                               published_at=clock.to_iso(now), last_error="")
-                db.update_item_status(conn, item.id, Status.PUBLISHED)
+                db.update_item_status(conn, item.id, item_status)
                 db.log_event(conn, Severity.INFO, "publish",
-                             f"published {item.uid} via {publisher.name}: {result.message}",
+                             f"{'staged' if staged else 'published'} {item.uid} "
+                             f"via {publisher.name}: {result.message}",
                              platform=job.platform,
                              payload={"job_id": job.id, "external_id": result.external_id})
             outcomes.append(RunOutcome(job, item, True, result.message))
@@ -275,19 +282,21 @@ def run_due(conn: sqlite3.Connection, settings: Settings, notifier: Notifier, *,
 
 def mark_published(conn: sqlite3.Connection, ref: int | str, *, external_url: str = "",
                    external_id: str = "") -> str:
-    """Record that a human posted a manually-staged item.
+    """Record that a person actually posted a staged item.
 
-    Without this, manually-published content never counts against the rate
-    limits, and the limits are the whole point.
+    The posting slot was already counted when the item was staged -- this
+    closes the loop, so the operator's worklist empties and the dashboard
+    stops showing it as outstanding.
     """
     item = db.get_item(conn, int(ref)) if str(ref).isdigit() else db.get_item_by_uid(conn, str(ref))
     if item is None:
         return f"no such content item: {ref}"
-    job = db.open_job_for_content(conn, item.id)
+    job = db.open_job_for_content(conn, item.id) or _staged_job_for(conn, item.id)
     now = clock.to_iso(clock.now_utc())
     with db.transaction(conn):
         if job:
-            db.update_job(conn, job.id, status=JobStatus.DONE.value, published_at=now,
+            db.update_job(conn, job.id, status=JobStatus.DONE.value,
+                          published_at=job.published_at or now,
                           external_url=external_url or job.external_url,
                           external_id=external_id or job.external_id)
         else:
@@ -300,4 +309,21 @@ def mark_published(conn: sqlite3.Connection, ref: int | str, *, external_url: st
         db.log_event(conn, Severity.INFO, "publish",
                      f"manually published {item.uid}", platform=item.platform,
                      payload={"external_url": external_url})
-    return f"{item.uid} marked as published"
+    return f"{item.uid} を公開済みとして記録しました"
+
+
+def _staged_job_for(conn: sqlite3.Connection, content_id: int) -> PublishJob | None:
+    row = conn.execute(
+        "SELECT * FROM publish_jobs WHERE content_id=? AND status=? ORDER BY id DESC LIMIT 1",
+        (content_id, JobStatus.STAGED.value),
+    ).fetchone()
+    if row is None:
+        return None
+    return PublishJob(
+        id=row["id"], content_id=row["content_id"], platform=row["platform"],
+        account=row["account"], scheduled_at=row["scheduled_at"], status=row["status"],
+        attempts=row["attempts"], last_error=row["last_error"],
+        external_id=row["external_id"], external_url=row["external_url"],
+        published_at=row["published_at"], created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )

@@ -31,6 +31,7 @@ from ..core import clock, db
 from ..core.config import load_settings
 from ..core.models import Status
 from ..guard import killswitch
+from ..scheduler import planner
 from . import views
 from .components import (
     badges, channel_label, e, is_blocked, page, status_label,
@@ -196,6 +197,25 @@ def create_app(config: str | None = None):
             return HTMLResponse(page("対話", views.chat_view(c, settings), settings,
                                      tab="tasks", switch_path="/chat", halts=halts(c),
                                      toast=msg))
+        finally:
+            c.close()
+
+    @app.get("/outbox", response_class=HTMLResponse)
+    def outbox(msg: str = ""):
+        c = conn()
+        try:
+            return HTMLResponse(page("投稿待ち", views.outbox_view(c, settings), settings,
+                                     tab="outbox", halts=halts(c), toast=msg))
+        finally:
+            c.close()
+
+    @app.post("/item/{item_id}/posted")
+    def do_posted(item_id: int, request: Request, url: str = Form("")):
+        """Confirm that a person actually posted a staged item."""
+        c = conn()
+        try:
+            message = planner.mark_published(c, item_id, external_url=url.strip())
+            return redirect("/outbox", message)
         finally:
             c.close()
 

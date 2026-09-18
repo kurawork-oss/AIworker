@@ -376,6 +376,36 @@ def cmd_mark_published(args) -> int:
         ctx.close()
 
 
+def cmd_outbox(args) -> int:
+    """List what has been staged for a person to post, and not yet confirmed.
+
+    With `publisher: manual` this is the operator's actual worklist. Without
+    it, the only record of what still needs posting is the outbox directory
+    and the operator's memory.
+    """
+    ctx = Context(args)
+    try:
+        jobs = db.staged_jobs(ctx.conn, limit=args.limit)
+        if not jobs:
+            print("手動投稿待ちはありません")
+            return 0
+        print(f"手動投稿待ち {len(jobs)}件\n")
+        for job in jobs:
+            item = db.get_item(ctx.conn, job.content_id)
+            when = clock.fmt_local(clock.parse_iso(job.published_at or job.scheduled_at),
+                                   ctx.settings.timezone, "%m/%d %H:%M")
+            print(f"  {item.uid if item else job.content_id}  {job.platform:<12} {when}")
+            if item:
+                print(f"    {item.preview(64)}")
+            if job.external_url:
+                print(f"    下書き: {job.external_url}")
+        print("\n投稿したら記録してください:")
+        print("  aiworker mark-published <uid> --url <投稿URL>")
+        return 0
+    finally:
+        ctx.close()
+
+
 def cmd_status(args) -> int:
     ctx = Context(args)
     try:
@@ -389,7 +419,10 @@ def cmd_status(args) -> int:
         print()
         print(f"承認待ち {counts['pending_review']}  ブロック {counts['blocked']}  "
               f"修正依頼 {counts['needs_revision']}  承認済 {counts['approved']}  "
-              f"予約 {counts['scheduled']}  公開 {counts['published']}  失敗 {counts['failed']}")
+              f"予約 {counts['scheduled']}  手動投稿待ち {counts['staged']}  "
+              f"公開 {counts['published']}  失敗 {counts['failed']}")
+        if counts["staged"]:
+            print(f"\n📮 手動投稿待ちが {counts['staged']}件 あります: aiworker outbox")
         print()
         for st in quota.all_states(ctx.conn, ctx.settings):
             cfg = ctx.settings.platform(st.platform)
@@ -635,6 +668,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--url", default="")
     sp.add_argument("--external-id", default="")
     sp.set_defaults(func=cmd_mark_published)
+
+    sp = sub.add_parser("outbox", help="手動投稿待ちの一覧（publisher: manual 運用の作業リスト）")
+    sp.add_argument("--limit", type=int, default=50)
+    sp.set_defaults(func=cmd_outbox)
 
     sp = sub.add_parser("status", help="現在の状態を1画面で表示")
     sp.set_defaults(func=cmd_status)

@@ -214,3 +214,71 @@ def test_plan_is_idempotent(conn, settings):
     second = planner.plan(conn, settings)
     assert len(first.scheduled) == 2
     assert len(second.scheduled) == 0
+
+
+# --------------------------------------------------------------------------
+# manual publishing: staged is not published
+# --------------------------------------------------------------------------
+def _stage_one(conn, settings, notifier, tmp_path):
+    """Approve, schedule and run one item through the manual publisher."""
+    from aiworker.publishers.dryrun import ManualPublisher
+
+    settings.platforms["x"].publisher = "manual"
+    item = GenerationService(conn, settings).generate("social_post", 1, platform="x").items[0]
+    approval.approve(conn, settings, item.id, actor="tester")
+    plan = planner.plan(conn, settings)
+    when = clock.parse_iso(plan.scheduled[0].job.scheduled_at)
+    planner.run_due(conn, settings, notifier, now=when)
+    return db.get_item(conn, item.id), plan.scheduled[0].job, when
+
+
+def test_manual_publishing_stages_rather_than_publishes(conn, settings, notifier, tmp_path):
+    """The manual publisher writes a file; it does not post anything. Marking
+    the item published would tell the operator something went out that has
+    not, and would leave them without a worklist."""
+    item, job, _ = _stage_one(conn, settings, notifier, tmp_path)
+    assert db.get_item(conn, item.id).status == Status.STAGED.value
+    assert db.get_job(conn, job.id).status == JobStatus.STAGED.value
+    assert db.staged_jobs(conn), "the staged item must appear on the worklist"
+
+
+def test_a_staged_item_still_consumes_its_posting_slot(conn, settings, notifier, tmp_path):
+    """Over-counting a slot costs one post; under-counting it costs an account.
+    A slot handed to a human must not be released because they have not
+    confirmed yet."""
+    from aiworker.guard import quota
+
+    _stage_one(conn, settings, notifier, tmp_path)
+    assert quota.state(conn, settings, "x").used_this_week == 1
+
+
+def test_confirming_a_staged_item_does_not_double_count_the_slot(conn, settings, notifier,
+                                                                 tmp_path):
+    from aiworker.guard import quota
+
+    item, _, _ = _stage_one(conn, settings, notifier, tmp_path)
+    before = quota.state(conn, settings, "x").used_this_week
+    planner.mark_published(conn, item.uid, external_url="https://example.invalid/1")
+    assert quota.state(conn, settings, "x").used_this_week == before
+    stored = db.get_item(conn, item.id)
+    assert stored.status == Status.PUBLISHED.value
+
+
+def test_confirming_records_the_external_url(conn, settings, notifier, tmp_path):
+    item, job, _ = _stage_one(conn, settings, notifier, tmp_path)
+    planner.mark_published(conn, item.uid, external_url="https://example.invalid/42")
+    stored = db.get_job(conn, job.id)
+    assert stored.status == JobStatus.DONE.value
+    assert stored.external_url == "https://example.invalid/42"
+
+
+def test_a_real_publisher_still_publishes_directly(conn, settings, notifier, monkeypatch):
+    """Only publishers that say a human must post are parked in STAGED."""
+    pub = install(monkeypatch, RecordingPublisher())
+    assert getattr(pub, "stages_for_human", False) is False
+    item = GenerationService(conn, settings).generate("social_post", 1, platform="x").items[0]
+    approval.approve(conn, settings, item.id, actor="tester")
+    plan = planner.plan(conn, settings)
+    planner.run_due(conn, settings, notifier,
+                    now=clock.parse_iso(plan.scheduled[0].job.scheduled_at))
+    assert db.get_item(conn, item.id).status == Status.PUBLISHED.value
