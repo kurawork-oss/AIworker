@@ -113,10 +113,14 @@ pytest.importorskip("fastapi")
 TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 
+CFG_PATH: list[str] = [""]
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("AIWORKER_ACTOR", "pytest")
     cfg = config_file(tmp_path)
+    CFG_PATH[0] = cfg
     main(["-c", cfg, "-q", "generate", "--channel", "social_post", "--count", "2"])
     from aiworker.webui.app import create_app
 
@@ -131,13 +135,13 @@ def test_ui_lists_the_queue(client):
 def test_ui_approves_and_says_so(client):
     r = client.post("/item/1/approve", data={"note": ""}, follow_redirects=True)
     assert "承認しました" in r.text
-    assert "approved" in client.get("/item/1").text
+    assert "承認済" in client.get("/item/1").text
 
 
 def test_ui_records_a_revision_request(client):
     r = client.post("/item/1/revise", data={"note": "冒頭を具体的に"}, follow_redirects=True)
     assert "修正依頼を記録しました" in r.text
-    assert "needs_revision" in r.text
+    assert "修正依頼中" in r.text
 
 
 def test_ui_reports_a_refused_override_instead_of_doing_nothing(client, tmp_path):
@@ -150,7 +154,7 @@ def test_ui_reports_a_refused_override_instead_of_doing_nothing(client, tmp_path
 def test_ui_rejects(client):
     r = client.post("/item/2/reject", data={"note": "重複"}, follow_redirects=True)
     assert r.status_code == 200
-    assert "rejected" in client.get("/item/2").text
+    assert "却下" in client.get("/item/2").text
 
 
 def test_ui_dashboard_renders(client):
@@ -165,3 +169,25 @@ def test_ui_refuses_to_bind_publicly():
 
 def test_healthz(client):
     assert client.get("/healthz").json()["ok"] is True
+
+
+def test_ui_does_not_offer_the_override_as_the_primary_action(client):
+    """On a blocked item, the prominent controls must be the ones that respect
+    the guardrail. If the override ever becomes the primary button again, this
+    fails."""
+    from aiworker.approval import service as approval
+    from aiworker.core import db
+    from aiworker.core.config import load_settings
+
+    settings = load_settings(CFG_PATH[0])
+    conn = db.init_db(settings.db_path)
+    approval.edit(conn, settings, 1, actor="pytest",
+                  body="この方法なら絶対に稼げます。" * 4)
+    conn.close()
+
+    text = client.get("/item/1").text
+    assert "上書き" in text, "the override must still be reachable"
+    assert 'class="override"' in text
+    assert '<button class="primary" type="submit">承認する</button>' not in text
+    # the primary action on a blocked item is sending it back
+    assert '<button class="primary" type="submit">修正を依頼</button>' in text

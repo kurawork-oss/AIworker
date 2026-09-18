@@ -23,22 +23,22 @@ WARNING = "warning"
 
 # Categories of prompt that are simply not worth the risk for a stock/AI pipeline.
 _INHERENT_RISK_PATTERNS: list[tuple[str, str]] = [
-    (r"(?i)\bin the style of\s+\w+", "imitating a named artist's style"),
+    (r"(?i)\bin the style of\s+\w+", "特定の作家の作風を模倣する表現があります"),
     (r"(?i)\b(disney|pixar|ghibli|marvel|pokemon|pokémon|nintendo|star wars)\b",
-     "well-known IP reference"),
-    (r"(?i)\b(getty|shutterstock|adobe\s*stock)\s+watermark", "watermark reference"),
+     "著名な知的財産への言及があります"),
+    (r"(?i)\b(getty|shutterstock|adobe\s*stock)\s+watermark", "ウォーターマークへの言及があります"),
     (r"(?i)\b(celebrity|famous actor|famous singer|有名人|芸能人)\b",
-     "real-person likeness reference"),
-    (r"(?i)\b(logo of|brand logo|ロゴ入り)\b", "brand logo reference"),
+     "実在人物の肖像を想起させる表現があります"),
+    (r"(?i)\b(logo of|brand logo|ロゴ入り)\b", "ブランドロゴへの言及があります"),
 ]
 
 # Claims that invite consumer-protection trouble in JP/US alike.
 _CLAIM_PATTERNS: list[tuple[str, str]] = [
     (r"(?i)(絶対に?稼げ|必ず儲か|100%稼げ|確実に稼げ|不労所得で月\d+万円確定)",
-     "guaranteed-income claim"),
-    (r"(?i)(guaranteed\s+(income|profit|returns))", "guaranteed-income claim"),
-    (r"(?i)(がん|癌|うつ病|糖尿病)(が|を)?(治る|治療|完治)", "medical efficacy claim"),
-    (r"(?i)(cures?\s+(cancer|depression|diabetes))", "medical efficacy claim"),
+     "収益を保証する表現があります"),
+    (r"(?i)(guaranteed\s+(income|profit|returns))", "収益を保証する表現があります"),
+    (r"(?i)(がん|癌|うつ病|糖尿病)(が|を)?(治る|治療|完治)", "医療効果をうたう表現があります"),
+    (r"(?i)(cures?\s+(cancer|depression|diabetes))", "医療効果をうたう表現があります"),
 ]
 
 _URL_RE = re.compile(r"https?://[^\s\]\)>\"']+")
@@ -108,24 +108,28 @@ def check(item: ContentItem, policy: PolicyConfig,
     scan = f"{text}\n{prompt_text}"
 
     for term in _contains_any(scan, policy.banned_terms):
-        report.findings.append(Finding("banned_term", BLOCKING, f"contains banned term '{term}'"))
+        report.findings.append(
+            Finding("banned_term", BLOCKING, f"禁止ワード「{term}」が含まれています")
+        )
     for term in _contains_any(scan, policy.real_person_terms):
         report.findings.append(
-            Finding("real_person", BLOCKING, f"references a real person '{term}'")
+            Finding("real_person", BLOCKING, f"実在人物名「{term}」への言及があります")
         )
     for term in _contains_any(scan, policy.trademark_terms):
         report.findings.append(
-            Finding("trademark", BLOCKING, f"references trademark '{term}'")
+            Finding("trademark", BLOCKING, f"商標「{term}」への言及があります")
         )
     for pattern in policy.banned_patterns:
         try:
             if re.search(pattern, scan, re.IGNORECASE):
                 report.findings.append(
-                    Finding("banned_pattern", BLOCKING, f"matches configured pattern /{pattern}/")
+                    Finding("banned_pattern", BLOCKING,
+                            f"設定した禁止パターン /{pattern}/ に一致します")
                 )
         except re.error:
             report.findings.append(
-                Finding("bad_config", WARNING, f"invalid regex in policy config: /{pattern}/")
+                Finding("bad_config", WARNING,
+                        f"policy設定の正規表現が不正です: /{pattern}/")
             )
     for pattern, why in _INHERENT_RISK_PATTERNS:
         if re.search(pattern, scan):
@@ -144,8 +148,8 @@ def check(item: ContentItem, policy: PolicyConfig,
             report.findings.append(
                 Finding(
                     "affiliate_disclosure", BLOCKING,
-                    "affiliate link present without a PR/広告 disclosure marker "
-                    f"(expected one of {policy.affiliate_markers})",
+                    "アフィリエイトリンクがあるのにPR表記がありません"
+                    f"（次のいずれかが必要: {'、'.join(policy.affiliate_markers)}）",
                 )
             )
 
@@ -155,19 +159,19 @@ def check(item: ContentItem, policy: PolicyConfig,
             report.findings.append(
                 Finding(
                     "ai_disclosure", BLOCKING,
-                    f"{platform_cfg.name} requires an AI-generation disclosure "
-                    f"(e.g. '{platform_cfg.disclosure_text}') and none was found",
+                    f"{platform_cfg.name} はAI生成の開示が必要ですが、開示文が見つかりません"
+                    f"（例:「{platform_cfg.disclosure_text}」）",
                 )
             )
 
     # --- soft signals ---------------------------------------------------------
     if len(urls) > 3:
         report.findings.append(
-            Finding("link_density", WARNING, f"{len(urls)} links in one item reads as spam")
+            Finding("link_density", WARNING, f"1件にリンクが{len(urls)}本あり、スパムに見えます")
         )
     if scan.count("#") > 12:
         report.findings.append(
-            Finding("hashtag_stuffing", WARNING, f"{scan.count('#')} hashtags")
+            Finding("hashtag_stuffing", WARNING, f"ハッシュタグが{scan.count('#')}個あります")
         )
     return report
 

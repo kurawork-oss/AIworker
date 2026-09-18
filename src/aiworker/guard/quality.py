@@ -146,21 +146,21 @@ def check(item: ContentItem, config: QualityConfig,
     lo = min_chars.get(item.channel, 20)
     hi = max_chars.get(item.channel, 20000)
     if body_len < lo:
-        report.issues.append(QualityIssue("too_short", f"{body_len} chars < minimum {lo}"))
+        report.issues.append(QualityIssue("too_short", f"{body_len}文字は下限{lo}文字を下回ります"))
     if body_len > hi:
-        report.issues.append(QualityIssue("too_long", f"{body_len} chars > maximum {hi}"))
+        report.issues.append(QualityIssue("too_long", f"{body_len}文字は上限{hi}文字を超えています"))
 
     low = f"{item.title}\n{item.body}".lower()
     for artefact in config.banned_artifacts:
         if artefact.lower() in low:
             report.issues.append(
-                QualityIssue("generation_artifact", f"output still contains '{artefact}'")
+                QualityIssue("generation_artifact", f"生成失敗の痕跡「{artefact}」が残っています")
             )
 
     for key in REQUIRED_META.get(item.channel, ()):
         value = item.meta.get(key)
         if not value or (isinstance(value, (list, dict)) and len(value) == 0):
-            report.issues.append(QualityIssue("missing_metadata", f"meta.{key} is empty"))
+            report.issues.append(QualityIssue("missing_metadata", f"必須項目 meta.{key} が空です"))
 
     if item.channel == Channel.STOCK_ASSET.value:
         # A stock prompt without these exclusions is how a watermark, a logo or
@@ -173,12 +173,13 @@ def check(item: ContentItem, config: QualityConfig,
             if missing:
                 report.issues.append(
                     QualityIssue("weak_negative_prompt",
-                                 f"negative_prompt is missing exclusions: {missing}")
+                                 f"negative_prompt に除外語が不足しています: {', '.join(missing)}")
                 )
         kws = item.meta.get("keywords") or []
         if isinstance(kws, list) and 0 < len(kws) < 8:
             report.issues.append(
-                QualityIssue("thin_keywords", f"only {len(kws)} keywords (stock sites want 8+)",
+                QualityIssue("thin_keywords",
+                             f"キーワードが{len(kws)}個しかありません（ストックサイトは8個以上が目安）",
                              fatal=False)
             )
 
@@ -187,7 +188,7 @@ def check(item: ContentItem, config: QualityConfig,
         if len(tags) < config.min_distinct_hashtags:
             report.issues.append(
                 QualityIssue("few_hashtags",
-                             f"{len(tags)} distinct hashtags < {config.min_distinct_hashtags}",
+                             f"ハッシュタグが{len(tags)}種類（下限{config.min_distinct_hashtags}種類）",
                              fatal=False)
             )
 
@@ -198,8 +199,8 @@ def check(item: ContentItem, config: QualityConfig,
             report.issues.append(
                 QualityIssue(
                     "duplicate",
-                    f"{score:.0%} similar to {uid or 'an earlier item'} "
-                    f"(threshold {config.max_similarity:.0%})",
+                    f"過去の{uid or '投稿'}と{score:.0%}類似しています"
+                    f"（閾値 {config.max_similarity:.0%}）",
                 )
             )
     return report

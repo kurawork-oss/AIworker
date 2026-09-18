@@ -41,7 +41,9 @@ body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,-appl
 "Hiragino Sans","Noto Sans JP",sans-serif}
 header{position:sticky;top:0;background:var(--card);border-bottom:1px solid var(--line);
 padding:12px 16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
-header a{color:var(--fg);text-decoration:none;font-weight:600}
+header a{color:var(--fg);text-decoration:none;font-weight:600;padding:4px 10px;
+border:1px solid var(--line);border-radius:8px}
+header a:hover{background:var(--bg)}
 header .halt{color:var(--bad);font-weight:700}
 main{max-width:860px;margin:0 auto;padding:16px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
@@ -58,6 +60,17 @@ button{font:inherit;padding:7px 14px;border-radius:8px;border:1px solid var(--li
 background:var(--card);color:var(--fg);cursor:pointer}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 button.danger{border-color:var(--bad);color:var(--bad)}
+/* The override control is deliberately the least prominent thing on the page.
+   A blocked item is one a guardrail refused; the affordance to ignore that
+   must not look like the obvious next tap. */
+button.override{border-color:var(--bad);color:var(--bad);background:transparent;
+font-size:13px;padding:6px 12px}
+.field{display:block;margin-bottom:6px}
+.field > span{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
+.action{border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px}
+.danger-zone{border:1px dashed var(--bad);border-radius:10px;padding:12px;margin-top:14px}
+.danger-zone > .meta{color:var(--bad)}
+.notice{border-left:3px solid var(--warn);padding-left:10px}
 form.inline{display:inline}
 input[type=text]{font:inherit;padding:7px;border:1px solid var(--line);border-radius:8px;
 background:var(--bg);color:var(--fg);width:100%;max-width:420px}
@@ -81,15 +94,85 @@ def _page(title: str, body: str, settings: Settings, halts: list) -> str:
 {halt_html}</header><main>{body}</main></body></html>"""
 
 
+#: The rest of the UI is Japanese; raw enum values in the one place a reviewer
+#: looks fastest were a needless translation step for them to do in their head.
+STATUS_LABELS = {
+    Status.PENDING_REVIEW.value: "承認待ち",
+    Status.BLOCKED.value: "ブロック",
+    Status.NEEDS_REVISION.value: "修正依頼中",
+    Status.APPROVED.value: "承認済",
+    Status.REJECTED.value: "却下",
+    Status.SCHEDULED.value: "予約済",
+    Status.PUBLISHED.value: "公開済",
+    Status.FAILED.value: "失敗",
+}
+
+
+def status_label(status: str) -> str:
+    return STATUS_LABELS.get(status, status)
+
+
 def _badges(item) -> str:
-    out = [f'<span class="badge">{html.escape(item.status)}</span>']
+    cls = {Status.BLOCKED.value: " bad", Status.APPROVED.value: " ok",
+           Status.PUBLISHED.value: " ok", Status.FAILED.value: " bad",
+           Status.NEEDS_REVISION.value: " warn"}.get(item.status, "")
+    out = [f'<span class="badge{cls}">{html.escape(status_label(item.status))}</span>']
     if item.policy_report.get("blocking"):
-        out.append('<span class="badge bad">POLICY</span>')
+        out.append('<span class="badge bad">規約</span>')
     if not item.quality_report.get("ok", True):
-        out.append('<span class="badge warn">QUALITY</span>')
+        out.append('<span class="badge warn">品質</span>')
     if item.similarity >= 0.6:
         out.append(f'<span class="badge warn">類似 {item.similarity:.0%}</span>')
     return "".join(out)
+
+
+def _decision_card(item, blocked: bool) -> str:
+    """Render the approve / revise / reject controls.
+
+    On a blocked item the ordering and the styling both change. The guardrails
+    already refused this content, so the prominent actions are the ones that
+    respect that refusal (send it back, or reject it), and the override is
+    pushed into a separate, visibly fenced-off block. Making "ignore the
+    guardrail" the big green button would be an approval gate that argues for
+    its own bypass.
+    """
+    revise = f'''
+<form class="action" method="post" action="/item/{item.id}/revise">
+  <label class="field"><span>修正内容（必須）</span>
+    <input type="text" name="note" placeholder="例: 冒頭を具体的な数字に変える"></label>
+  <button class="{'primary' if blocked else ''}" type="submit">修正を依頼</button>
+</form>'''
+    reject = f'''
+<form class="action" method="post" action="/item/{item.id}/reject">
+  <label class="field"><span>却下理由（任意）</span>
+    <input type="text" name="note" placeholder="例: テーマが直近と重複"></label>
+  <button class="danger" type="submit">却下する</button>
+</form>'''
+
+    if not blocked:
+        approve = f'''
+<form class="action" method="post" action="/item/{item.id}/approve">
+  <label class="field"><span>メモ（任意）</span>
+    <input type="text" name="note" placeholder="承認時のメモ"></label>
+  <button class="primary" type="submit">承認する</button>
+</form>'''
+        return f'<div class="card"><b>判断</b>{approve}{revise}{reject}</div>'
+
+    override = f'''
+<div class="danger-zone">
+  <div class="meta">⚠ この項目はガードレールがブロックしています。
+  上書き承認は <b>approve_override</b> として、理由つきで監査ログに残ります。
+  上のガードレール判定を読んだうえで、それでも問題ないと判断できる場合だけ使ってください。</div>
+  <form method="post" action="/item/{item.id}/approve">
+    <label class="field"><span>上書きする理由（必須）</span>
+      <input type="text" name="note" placeholder="なぜこの指摘が当てはまらないのか"></label>
+    <button class="override" type="submit">理由を記録して上書き承認</button>
+  </form>
+</div>'''
+    return ('<div class="card"><b>判断</b>'
+            '<div class="meta notice">ガードレールがブロックした項目です。'
+            'まず修正依頼か却下を検討してください。</div>'
+            f'{revise}{reject}{override}</div>')
 
 
 def create_app(config: str | None = None):
@@ -146,11 +229,12 @@ def create_app(config: str | None = None):
                 return HTMLResponse(_page("404", '<div class="card">見つかりません</div>',
                                           settings, []), status_code=404)
             findings = "".join(
-                f'<div class="meta">policy [{html.escape(f["severity"])}] '
-                f'{html.escape(f["detail"])}</div>'
+                f'<div class="meta">🛑 {html.escape(f["detail"])}</div>'
+                if f["severity"] == "blocking" else
+                f'<div class="meta">⚠ {html.escape(f["detail"])}</div>'
                 for f in item.policy_report.get("findings", [])
             ) + "".join(
-                f'<div class="meta">quality [{"fatal" if i["fatal"] else "warn"}] '
+                f'<div class="meta">{"🛑" if i["fatal"] else "⚠"} '
                 f'{html.escape(i["detail"])}</div>'
                 for i in item.quality_report.get("issues", [])
             ) or '<div class="meta">指摘なし</div>'
@@ -159,7 +243,6 @@ def create_app(config: str | None = None):
                 for k, v in sorted(item.meta.items()) if k not in {"schema_keys"}
             )
             blocked = item.policy_report.get("blocking") or not item.quality_report.get("ok", True)
-            approve_label = "承認する" if not blocked else "ブロックを上書きして承認"
             # A silent no-op is the worst failure mode for an approval gate: the
             # reviewer thinks they approved something they did not.
             banner = (f'<div class="card"><b>{html.escape(msg)}</b></div>') if msg else ""
@@ -172,20 +255,7 @@ def create_app(config: str | None = None):
 <div class="card"><b>メタデータ</b>{meta_rows or '<div class="meta">なし</div>'}</div>
 <div class="card"><b>ガードレール判定</b>
 <div class="meta">類似度 {item.similarity:.0%}</div>{findings}</div>
-<div class="card"><b>判断</b>
-<form method="post" action="/item/{item.id}/approve">
-  <input type="text" name="note" placeholder="{'上書き理由(必須)' if blocked else 'メモ(任意)'}">
-  <div class="row"><button class="primary" type="submit">{approve_label}</button></div>
-</form>
-<form method="post" action="/item/{item.id}/revise">
-  <input type="text" name="note" placeholder="修正内容(必須)">
-  <div class="row"><button type="submit">修正を依頼</button></div>
-</form>
-<form method="post" action="/item/{item.id}/reject">
-  <input type="text" name="note" placeholder="却下理由(任意)">
-  <div class="row"><button class="danger" type="submit">却下</button></div>
-</form>
-</div>"""
+{_decision_card(item, blocked)}"""
             return HTMLResponse(_page(item.uid, body, settings,
                                       killswitch.active_halts(c, settings.state_dir)))
         finally:
@@ -230,7 +300,11 @@ def create_app(config: str | None = None):
         try:
             text = reporting.ops_report(c, settings, days=days)
             quotas = "".join(
-                f'<div class="meta">{html.escape(s.summary())}</div>'
+                f'<div class="meta">{html.escape(s.platform)} — '
+                f'本日 {s.used_today}/{s.daily_limit} ／ '
+                f'今週 {s.used_this_week}/{s.weekly_limit} ／ 残り {s.capacity}'
+                + ('  ⚠ 上限が近い' if s.near_limit else '')
+                + '</div>'
                 for s in quota.all_states(c, settings)
             )
             body = (f'<div class="card"><b>投稿枠</b>{quotas}</div>'

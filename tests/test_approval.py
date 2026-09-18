@@ -39,7 +39,7 @@ def test_blocked_content_cannot_be_approved_without_force(conn, settings):
     item = generate(conn, settings, 1).items[0]
     approval.edit(conn, settings, item.id, actor="a", body="禁止ワードを含む本文です。" * 4)
     d = approval.approve(conn, settings, item.id, actor="a")
-    assert not d.ok and "override" in d.message
+    assert not d.ok and "--force" in d.message
     assert db.get_item(conn, item.id).status == Status.BLOCKED.value
 
 
