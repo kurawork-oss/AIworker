@@ -81,6 +81,9 @@ AIworker/
 │   │   ├── dryrun.py             dryrun（何もしない） / manual（下書き出力）
 │   │   └── registry.py           アダプタ解決。dry_run はここで一括適用
 │   │
+│   ├── metrics/
+│   │   └── importer.py           アナリティクスCSV取込（リーチ急減検知の入力）
+│   │
 │   ├── revenue/
 │   │   ├── importer.py           CSV取込（日本語列名・Shift-JIS・重複取込対応）
 │   │   └── report.py             運用レポートと収益サマリー（テキスト図表）
@@ -102,6 +105,7 @@ AIworker/
 │   ├── test_pipeline.py          ★E2E：未承認は絶対に公開されない
 │   ├── test_anomaly.py           異常検知
 │   ├── test_revenue.py           収益取込と集計
+│   ├── test_metrics.py           実績取込とスキーマ移行
 │   ├── test_resources.py         同梱テンプレートの存在と、リポジトリ側との同一性
 │   └── test_cli.py               各コマンドと承認UIのスモークテスト
 │

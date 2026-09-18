@@ -47,7 +47,7 @@ def test_failures_trigger_an_automatic_halt(conn, settings, make_item):
     anomaly.react(conn, settings, anomaly.scan(conn, settings), notifier,
                   state_dir=settings.state_dir)
     assert killswitch.check(conn, settings.state_dir, "x").halted
-    assert any("AUTO-HALT" in a.title for a in notifier.alerts)
+    assert any("自動停止" in a.title for a in notifier.alerts)
 
 
 def test_auto_halt_can_be_switched_off(conn, settings, make_item):

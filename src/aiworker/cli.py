@@ -30,6 +30,7 @@ from .generators.service import GenerationService
 from .guard import anomaly, killswitch, quota
 from .notify.notifier import Alert, Notifier
 from .publishers.registry import publisher_for
+from .metrics import importer as metrics_importer
 from .revenue import importer, report as reporting
 from .scheduler import planner
 
@@ -481,7 +482,10 @@ def cmd_revenue_import(args) -> int:
         print(result.summary())
         for s in result.skipped[:10]:
             print(f"  - {s}")
-        return 0 if result.imported or not result.rows else 1
+        if not result.imported:
+            print("\n取り込めた行がありません。列名を確認してください。", file=sys.stderr)
+            return 1
+        return 0
     finally:
         ctx.close()
 
@@ -501,7 +505,7 @@ def cmd_metrics_add(args) -> int:
     ctx = Context(args)
     try:
         with db.transaction(ctx.conn):
-            db.insert_metric(ctx.conn, date=args.date, platform=args.platform,
+            db.upsert_metric(ctx.conn, date=args.date, platform=args.platform,
                              account=args.account, external_id=args.external_id,
                              impressions=args.impressions, reach=args.reach,
                              clicks=args.clicks, note=args.note)
@@ -511,6 +515,43 @@ def cmd_metrics_add(args) -> int:
             anomaly.react(ctx.conn, ctx.settings, found, ctx.notifier)
             for a in found:
                 print(f"  ⚠ {a.code}: {a.message}")
+        return 0
+    finally:
+        ctx.close()
+
+
+def cmd_metrics_import(args) -> int:
+    ctx = Context(args)
+    try:
+        result = metrics_importer.import_csv(
+            ctx.conn, Path(args.path), platform=args.platform, account=args.account,
+            reach_from=args.reach_from,
+        )
+        print(result.summary())
+        for s in result.skipped[:10]:
+            print(f"  - {s}")
+        if result.imported:
+            series = db.daily_reach(ctx.conn, args.platform, limit=10)
+            if series:
+                print("\n直近の推移:")
+                peak = max(v for _, v in series) or 1
+                for date, value in series:
+                    bar = "█" * max(1, round(value / peak * 24))
+                    print(f"  {date}  {value:>9,.0f}  {bar}")
+            # Only the platform just imported: scanning all of them here makes
+            # another platform's pre-existing drop look like a consequence of
+            # this import.
+            found = [a for a in anomaly.detect_reach_drop(ctx.conn, ctx.settings)
+                     if a.platform == args.platform]
+            for a in found:
+                print(f"\n⚠ {a.message}")
+                anomaly.react(ctx.conn, ctx.settings, [a], ctx.notifier)
+        # A CSV whose columns we could not read produced nothing usable. Exiting
+        # 0 there would make a cron job report success while the reach-drop
+        # detector quietly keeps reading an empty table.
+        if not result.imported:
+            print("\n取り込めた行がありません。列名を確認してください。", file=sys.stderr)
+            return 1
         return 0
     finally:
         ctx.close()
@@ -719,6 +760,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     met = sub.add_parser("metrics", help="リーチ等の実績値")
     msub = met.add_subparsers(dest="metrics_command", required=True)
+    sp = msub.add_parser("import", help="各プラットフォームのアナリティクスCSVを取り込む")
+    sp.add_argument("path")
+    sp.add_argument("--platform", required=True, help="x / threads / youtube / note など")
+    sp.add_argument("--account", default="main")
+    sp.add_argument("--reach-from", default="auto", choices=list(metrics_importer.REACH_SOURCES),
+                    help="リーチとして扱う指標 (既定: auto = リーチ列があればそれ、なければ表示回数)")
+    sp.set_defaults(func=cmd_metrics_import)
+
     sp = msub.add_parser("add", help="1件記録する (リーチ急減検知に使われる)")
     sp.add_argument("--date", required=True)
     sp.add_argument("--platform", required=True)

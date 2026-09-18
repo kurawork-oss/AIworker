@@ -322,3 +322,28 @@ def test_outbox_offers_a_copy_button(client):
     text = client.get("/outbox").text
     assert "本文をコピー" in text
     assert "data-copy=" in text
+
+
+# ---- metrics import -------------------------------------------------------
+def test_metrics_import_command(tmp_path, capsys):
+    csv_path = tmp_path / "x.csv"
+    csv_path.write_text("Date,impressions\n2026-09-15,4000\n2026-09-16,4200\n",
+                        encoding="utf-8")
+    assert run(tmp_path, "metrics", "import", str(csv_path), "--platform", "x") == 0
+    out = capsys.readouterr().out
+    assert "2行を取り込みました" in out
+    assert "直近の推移" in out
+
+
+def test_metrics_import_fails_loudly_on_an_unreadable_file(tmp_path, capsys):
+    """Exiting 0 here would make a cron job report success while the
+    reach-drop detector keeps reading an empty table."""
+    csv_path = tmp_path / "bad.csv"
+    csv_path.write_text("foo,bar\n1,2\n", encoding="utf-8")
+    assert run(tmp_path, "metrics", "import", str(csv_path), "--platform", "x") == 1
+
+
+def test_revenue_import_fails_loudly_on_an_unreadable_file(tmp_path):
+    csv_path = tmp_path / "bad.csv"
+    csv_path.write_text("foo,bar\n1,2\n", encoding="utf-8")
+    assert run(tmp_path, "revenue", "import", str(csv_path), "--source", "a8") == 1

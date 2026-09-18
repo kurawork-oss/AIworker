@@ -187,6 +187,35 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 切り替えたら、少数（3件程度）生成して全文を読み、品質を確認してください。
 
+## 4.8.5 実績（リーチ）の取り込み
+
+リーチ急減検知は、アカウントが制限される「前」に出る数少ない兆候を見る仕組みです。
+その入力は各プラットフォームのアナリティクスCSVです。
+
+```bash
+# X: analytics.x.com → エクスポート
+aiworker metrics import ~/Downloads/tweet_activity.csv --platform x
+
+# YouTube: Studio → アナリティクス → エクスポート（Shift-JISでも読めます）
+aiworker metrics import ~/Downloads/chart_data.csv --platform youtube
+
+# Threads / note なども同様
+aiworker metrics import ~/Downloads/threads.csv --platform threads
+```
+
+列名は日英どちらでも自動判別します（`日付`/`Date`、`インプレッション数`/`impressions`、
+`視聴回数`/`views`、`リーチ`/`Reach` など）。**同じファイルを何度取り込んでも
+二重計上しません。** 数値が確定して再エクスポートした場合は、新しい値で上書きされます。
+
+> **リーチ列がないプラットフォームについて。** X は表示回数、YouTube は視聴回数しか
+> 出しません。その場合は表示回数をリーチの代わりに使い、取込結果にその旨を表示します。
+> 1つのプラットフォーム内で指標が混ざらない限り、急減の判定は成立します。
+> 明示したい場合は `--reach-from impressions` を付けてください。
+
+取り込み後、その場で推移が表示され、急減していればアラートが出ます。
+**週1回でよいので、これを習慣にしてください。** 手入力（`aiworker metrics add`）は
+続かないので、実質いちばん弱いガードレールになります。
+
 ## 4.9 自動実行（cron）
 
 ```bash

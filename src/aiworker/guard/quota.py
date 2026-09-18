@@ -53,8 +53,8 @@ class QuotaState:
         return self.used_today / self.daily_limit >= 0.8
 
     def summary(self) -> str:
-        return (f"{self.platform}/{self.account}: today {self.used_today}/{self.daily_limit}, "
-                f"week {self.used_this_week}/{self.weekly_limit}")
+        return (f"{self.platform}/{self.account}: 本日 {self.used_today}/{self.daily_limit}、"
+                f"今週 {self.used_this_week}/{self.weekly_limit}")
 
 
 def _slots_in_use(conn: sqlite3.Connection, platform: str, account: str,

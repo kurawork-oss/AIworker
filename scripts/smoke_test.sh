@@ -84,9 +84,28 @@ step "revenue import + report"
 # Today's date, because `report --days N` looks back from the real clock.
 TODAY="$(date +%Y-%m-%d)"
 printf '日付,プログラム名,報酬額,件数\n%s,テストPG,"1,234",2\n' "$TODAY" > "$WORK/rev.csv"
-$BIN revenue import "$WORK/rev.csv" --source a8 | grep -q "imported 1" \
+$BIN revenue import "$WORK/rev.csv" --source a8 | grep -q "1/1行を取り込みました" \
   || fail "収益CSVが取り込めませんでした"
 $BIN report --days 30 | grep -q "1,234" || fail "レポートに収益が反映されていません"
+
+step "metrics import feeds the reach-drop detector"
+# Six normal days then a collapse: the detector must actually fire, otherwise
+# the only guardrail that can notice a shadowban is decorative.
+{
+  echo "Date,impressions"
+  for d in 01 02 03 04 05 06; do echo "2030-02-$d,4000"; done
+  echo "2030-02-07,120"
+} > "$WORK/reach.csv"
+$BIN metrics import "$WORK/reach.csv" --platform x > "$WORK/metrics.txt" 2>&1 \
+  || { cat "$WORK/metrics.txt"; fail "実績CSVが取り込めませんでした"; }
+grep -q "リーチ" "$WORK/metrics.txt" \
+  || { cat "$WORK/metrics.txt"; fail "リーチ急減が検知されていません"; }
+
+step "an unreadable CSV must fail, not pass quietly"
+printf 'foo,bar\n1,2\n' > "$WORK/bad.csv"
+if $BIN metrics import "$WORK/bad.csv" --platform x > /dev/null 2>&1; then
+  fail "読めないCSVが成功扱いになりました（cronで黙って失敗し続けます）"
+fi
 
 step "checklist"
 $BIN checklist | grep -q "チェックリスト" || fail "チェックリストが表示されません"

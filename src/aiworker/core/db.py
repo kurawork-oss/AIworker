@@ -12,12 +12,12 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from . import clock
 from .models import ContentItem, JobStatus, PublishJob, Severity, Status
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -142,14 +142,90 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _migrate_2_unique_metrics(conn: sqlite3.Connection) -> None:
+    """Make metric rows idempotent on (date, platform, account, external_id).
+
+    Without this, importing the same analytics export twice doubles the
+    numbers. `daily_reach` sums, and the reach-drop detector compares a day
+    against the median of the days before it -- so a double import reads as
+    growth, and the day you stop re-importing reads as a collapse. A false
+    halt from the safety system is still an outage.
+
+    Existing duplicates are collapsed to the most recently written row before
+    the index goes on, or creating it would fail on a live database.
+    """
+    conn.execute(
+        """DELETE FROM metrics WHERE id NOT IN (
+               SELECT MAX(id) FROM metrics
+               GROUP BY date, platform, account, external_id
+           )"""
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_metrics_unique "
+        "ON metrics(date, platform, account, external_id)"
+    )
+
+
+#: version -> callable. Applied in order, each inside its own transaction.
+MIGRATIONS: dict[int, "Callable[[sqlite3.Connection], None]"] = {
+    2: _migrate_2_unique_metrics,
+}
+
+
+def current_schema_version(conn: sqlite3.Connection) -> int:
+    """0 for a database that has never been initialised."""
+    try:
+        row = conn.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return 0  # schema_meta itself does not exist yet
+    return int(row["value"]) if row else 0
+
+
+def migrate(conn: sqlite3.Connection) -> list[int]:
+    """Bring an existing database up to SCHEMA_VERSION.
+
+    The database holds the approval history and every draft, so it is never
+    thrown away and recreated; schema changes have to be applied in place.
+    Returns the versions that were applied.
+    """
+    version = current_schema_version(conn)
+    applied = []
+    for target in sorted(MIGRATIONS):
+        if target <= version:
+            continue
+        with transaction(conn):
+            MIGRATIONS[target](conn)
+            conn.execute(
+                "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(target),),
+            )
+        applied.append(target)
+    return applied
+
+
 def init_db(db_path: Path) -> sqlite3.Connection:
     conn = connect(db_path)
+    # Read the version BEFORE creating anything: `executescript(SCHEMA)` uses
+    # CREATE TABLE IF NOT EXISTS, so afterwards an old database is
+    # indistinguishable from a new one.
+    before = current_schema_version(conn)
     conn.executescript(SCHEMA)
-    conn.execute(
-        "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (str(SCHEMA_VERSION),),
-    )
+
+    if before == 0:
+        # Brand new: SCHEMA is already current, so stamp the version and apply
+        # the pieces migrations add (indexes SCHEMA does not declare).
+        for step in MIGRATIONS.values():
+            step(conn)
+        conn.execute(
+            "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (str(SCHEMA_VERSION),),
+        )
+    else:
+        migrate(conn)
     return conn
 
 
@@ -509,6 +585,25 @@ def consecutive_failures(conn: sqlite3.Connection, platform: str, *, window: int
 # --------------------------------------------------------------------------
 # metrics & revenue
 # --------------------------------------------------------------------------
+def upsert_metric(conn: sqlite3.Connection, *, date: str, platform: str,
+                  account: str = "main", external_id: str = "", impressions: int = 0,
+                  reach: int = 0, clicks: int = 0, note: str = "") -> None:
+    """Record a metric row, replacing any earlier row for the same key.
+
+    Re-importing the same analytics export must not double the numbers --
+    `daily_reach` sums them, and the anomaly detector reads that sum.
+    """
+    conn.execute(
+        "INSERT INTO metrics(date, platform, account, external_id, impressions, reach, "
+        "clicks, note, created_at) VALUES(?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(date, platform, account, external_id) DO UPDATE SET "
+        "impressions=excluded.impressions, reach=excluded.reach, "
+        "clicks=excluded.clicks, note=excluded.note",
+        (date, platform, account, external_id, impressions, reach, clicks, note,
+         clock.to_iso(clock.now_utc())),
+    )
+
+
 def insert_metric(conn: sqlite3.Connection, *, date: str, platform: str, account: str = "main",
                   external_id: str = "", impressions: int = 0, reach: int = 0,
                   clicks: int = 0, note: str = "") -> None:
@@ -521,9 +616,23 @@ def insert_metric(conn: sqlite3.Connection, *, date: str, platform: str, account
 
 
 def daily_reach(conn: sqlite3.Connection, platform: str, *, limit: int = 30) -> list[tuple[str, float]]:
+    """Daily audience size, falling back to impressions where reach is absent.
+
+    Most platforms do not export "reach" under that name: X gives impressions,
+    YouTube gives views. A detector that reads only the `reach` column would
+    sit at zero for those platforms and silently never fire -- which looks
+    exactly like "nothing is wrong".
+
+    Reach wins where it exists (unique people is the more direct signal for a
+    reach collapse) and impressions stand in where it does not. Note that
+    reach <= impressions always, so this must not be `MAX()`: mixing the two
+    measures across days on one platform would make the series incoherent and
+    the median comparison meaningless. A given platform's export has the same
+    columns every time, so in practice a platform stays on one measure.
+    """
     rows = conn.execute(
-        "SELECT date, SUM(reach) r FROM metrics WHERE platform=? GROUP BY date "
-        "ORDER BY date DESC LIMIT ?",
+        "SELECT date, SUM(CASE WHEN reach > 0 THEN reach ELSE impressions END) r "
+        "FROM metrics WHERE platform=? GROUP BY date ORDER BY date DESC LIMIT ?",
         (platform, limit),
     ).fetchall()
     return [(r["date"], float(r["r"] or 0)) for r in reversed(rows)]

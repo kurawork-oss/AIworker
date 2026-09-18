@@ -53,6 +53,7 @@ APIキーは不要です（既定の `mock` プロバイダはオフラインで
 | **承認UI** | スマホアプリ形式。リスト / フロー / スワイプ / 対話 ＋ 投稿待ち ＋ レポート ＋ 設定 |
 | **手動投稿の追跡** | 下書き出力は「公開済」にせず「手動投稿待ち」として残す。投稿枠は出力時点で消費 |
 | **異常検知** | 連続失敗・警告文言・リーチ急減・上限接近。前2つは自動停止 |
+| **実績取込** | 各プラットフォームのアナリティクスCSV（日英列名・Shift-JIS・再取込安全） |
 | **緊急停止** | DBフラグ + STOPファイルの二重化。自動解除はしない |
 | **収益集計** | CSV取込（日本語列名・Shift-JIS対応）・ソース別集計・集中度警告 |
 | **監査ログ** | 全ての判断と公開をDBとJSON Linesの両方に記録。30日保持 |
@@ -74,6 +75,7 @@ aiworker mark-published <uid> --url ...   # 投稿した事実とURLを記録
 aiworker status                # 現在の状態
 aiworker report --days 7       # 運用・収益レポート
 aiworker revenue import a8.csv --source a8
+aiworker metrics import tweet_activity.csv --platform x   # リーチ急減検知の入力
 aiworker stop --reason "..."   # 緊急停止
 aiworker resume --yes          # 解除
 aiworker checklist             # 運用開始前チェックリスト

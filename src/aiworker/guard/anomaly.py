@@ -50,7 +50,7 @@ def detect_consecutive_failures(conn: sqlite3.Connection, settings: Settings) ->
         if n >= threshold:
             out.append(Anomaly(
                 "consecutive_failures", name, Severity.CRITICAL,
-                f"{n} consecutive publish failures (threshold {threshold})",
+                f"公開が{n}回連続で失敗しています（閾値 {threshold}回）",
                 halt=settings.anomaly.auto_halt_on_failures,
             ))
     return out
@@ -76,8 +76,8 @@ def detect_reach_drop(conn: sqlite3.Connection, settings: Settings) -> list[Anom
         if ratio < cfg.reach_drop_ratio:
             out.append(Anomaly(
                 "reach_drop", name, Severity.ERROR,
-                f"reach on {latest_day} was {latest:.0f} vs median {baseline:.0f} "
-                f"({ratio:.0%} of baseline; alert below {cfg.reach_drop_ratio:.0%})",
+                f"{latest_day} のリーチが {latest:,.0f}。直近の中央値 {baseline:,.0f} の "
+                f"{ratio:.0%} です（{cfg.reach_drop_ratio:.0%} を下回ると通知）",
             ))
     return out
 
@@ -104,7 +104,8 @@ def detect_platform_warnings(conn: sqlite3.Connection, settings: Settings,
             seen.add((r["platform"], hit))
             out.append(Anomaly(
                 "platform_warning", r["platform"] or "", Severity.CRITICAL,
-                f"platform response mentions '{hit}': {(r['last_error'] or '')[:200]}",
+                f"プラットフォームの応答に「{hit}」が含まれています: "
+                f"{(r['last_error'] or '')[:200]}",
                 halt=True,
             ))
     return out
@@ -115,7 +116,7 @@ def detect_quota_pressure(conn: sqlite3.Connection, settings: Settings) -> list[
     for st in quota.warn_if_near_limit(conn, settings):
         out.append(Anomaly(
             "quota_pressure", st.platform, Severity.WARNING,
-            f"{st.summary()} -- at {settings.anomaly.quota_warn_ratio:.0%} of the daily cap",
+            f"{st.summary()} — 日次上限の{settings.anomaly.quota_warn_ratio:.0%}に達しました",
         ))
     return out
 
@@ -138,7 +139,7 @@ def react(conn: sqlite3.Connection, settings: Settings, anomalies: list[Anomaly]
     for a in anomalies:
         db.log_event(conn, a.severity, "anomaly", a.message, platform=a.platform,
                      payload=a.as_dict())
-        notifier.send(Alert(a.severity, f"anomaly: {a.code}", a.message, a.platform))
+        notifier.send(Alert(a.severity, f"異常検知: {a.code}", a.message, a.platform))
         if a.halt and auto_halt:
             current = killswitch.check(conn, state_dir, a.platform)
             if not current.halted:
@@ -147,9 +148,10 @@ def react(conn: sqlite3.Connection, settings: Settings, anomalies: list[Anomaly]
                     actor="anomaly-detector", platform=a.platform or None,
                 )
                 notifier.send(Alert(
-                    Severity.CRITICAL, f"AUTO-HALT: {a.platform or 'global'}",
-                    f"publishing stopped automatically.\nreason: {a.message}\n"
-                    f"resume with: aiworker resume --platform {a.platform}",
+                    Severity.CRITICAL, f"自動停止: {a.platform or '全体'}",
+                    f"公開を自動的に停止しました。\n理由: {a.message}\n"
+                    f"原因を確認してから解除してください: "
+                    f"aiworker resume --platform {a.platform} --yes",
                     a.platform,
                 ))
     return anomalies

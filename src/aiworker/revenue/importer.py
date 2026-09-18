@@ -42,8 +42,8 @@ class ImportResult:
     skipped: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
-        return (f"{self.source}: imported {self.imported}/{self.rows} rows"
-                + (f", {len(self.skipped)} skipped" if self.skipped else ""))
+        return (f"{self.source}: {self.imported}/{self.rows}行を取り込みました"
+                + (f"、{len(self.skipped)}行スキップ" if self.skipped else ""))
 
 
 def _pick(header: list[str], field_name: str) -> str | None:
@@ -61,7 +61,7 @@ def _to_float(raw: str) -> float:
     try:
         return float(cleaned)
     except ValueError:
-        raise ValueError(f"not a number: {raw!r}") from None
+        raise ValueError(f"数値として読めません: {raw!r}") from None
 
 
 def _to_date(raw: str) -> str:
@@ -77,7 +77,7 @@ def _to_date(raw: str) -> str:
     try:
         return _dt.date.fromisoformat(raw[:10]).isoformat()
     except ValueError:
-        raise ValueError(f"unrecognised date: {raw!r}") from None
+        raise ValueError(f"日付として読めません: {raw!r}") from None
 
 
 def import_csv(conn: sqlite3.Connection, path: Path, *, source: str,
@@ -88,7 +88,7 @@ def import_csv(conn: sqlite3.Connection, path: Path, *, source: str,
     result = ImportResult(source=source)
     path = Path(path)
     if not path.exists():
-        result.skipped.append(f"file not found: {path}")
+        result.skipped.append(f"ファイルが見つかりません: {path}")
         return result
 
     try:
@@ -102,8 +102,9 @@ def import_csv(conn: sqlite3.Connection, path: Path, *, source: str,
     amount_col = _pick(header, "amount")
     if not date_col or not amount_col:
         result.skipped.append(
-            f"could not find a date and an amount column in {header}. "
-            f"expected one of {COLUMN_ALIASES['date']} and {COLUMN_ALIASES['amount']}"
+            f"日付と金額の列が見つかりません。見つかった列: {header} ／ "
+            f"日付として認識する列名: {'、'.join(COLUMN_ALIASES['date'])} ／ "
+            f"金額として認識する列名: {'、'.join(COLUMN_ALIASES['amount'])}"
         )
         return result
     units_col = _pick(header, "units")
@@ -117,7 +118,7 @@ def import_csv(conn: sqlite3.Connection, path: Path, *, source: str,
                 date = _to_date(row.get(date_col, ""))
                 amount = _to_float(row.get(amount_col, ""))
             except ValueError as exc:
-                result.skipped.append(f"line {i}: {exc}")
+                result.skipped.append(f"{i}行目: {exc}")
                 continue
             units = int(_to_float(row.get(units_col, "0"))) if units_col else 0
             note = (row.get(note_col, "") or "").strip() if note_col else ""

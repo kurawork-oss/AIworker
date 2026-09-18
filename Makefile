@@ -1,7 +1,7 @@
 PY ?= python3
 export PYTHONPATH := src
 
-.PHONY: help init doctor test check smoke hygiene ui generate review status report clean
+.PHONY: help init doctor test check smoke hygiene ui sync-templates generate review status report clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -22,6 +22,9 @@ hygiene:  ## 秘密情報・実データ・危険な既定値が混入してい�
 
 ui:  ## 承認UIの全画面が描画できるか
 	$(PY) scripts/check_web_ui.py
+
+sync-templates:  ## リポジトリ直下のテンプレートを同梱コピーへ反映
+	./scripts/sync_templates.sh
 
 smoke:  ## インストール済みパッケージに対するE2E（要 pip install .）
 	./scripts/smoke_test.sh

@@ -43,7 +43,7 @@ def test_bad_rows_are_skipped_not_fatal(conn, tmp_path):
 def test_missing_columns_report_what_was_expected(conn, tmp_path):
     path = write(tmp_path, "bad.csv", "foo,bar\n1,2\n")
     result = importer.import_csv(conn, path, source="a8")
-    assert result.imported == 0 and "could not find" in result.skipped[0]
+    assert result.imported == 0 and "見つかりません" in result.skipped[0]
 
 
 def test_reimporting_the_same_file_does_not_double_count(conn, tmp_path):
@@ -56,7 +56,7 @@ def test_reimporting_the_same_file_does_not_double_count(conn, tmp_path):
 
 def test_missing_file_is_reported_not_raised(conn, tmp_path):
     result = importer.import_csv(conn, tmp_path / "nope.csv", source="a8")
-    assert result.imported == 0 and "not found" in result.skipped[0]
+    assert result.imported == 0 and "ファイルが見つかりません" in result.skipped[0]
 
 
 def test_concentration_warning_fires(conn):
