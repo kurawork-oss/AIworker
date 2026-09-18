@@ -1,0 +1,178 @@
+# =============================================================================
+# AIworker configuration (example)
+#
+#   cp config/config.example.yaml config/config.yaml
+#
+# This file holds BEHAVIOUR only. Secrets live in .env and are referenced here
+# as ${ENV:VAR_NAME} -- never paste a key into this file.
+#
+# The numbers below are deliberately conservative. Raise them only after you
+# have watched a platform's behaviour for a few weeks; the cost of being too
+# slow is a slow month, the cost of being too fast is a dead account.
+# =============================================================================
+
+timezone: Asia/Tokyo
+
+state_dir: var
+db_path: var/aiworker.db
+log_dir: var/logs
+log_retention_days: 30
+
+# Global dry-run. With this on, publishers are swapped for the no-op publisher:
+# jobs run, get logged, and are marked done, but nothing leaves the machine.
+# Keep it on until you have watched a full cycle end to end.
+dry_run: true
+
+# Cannot be set to false. The approval gate is the point of this system.
+require_human_approval: true
+
+# -----------------------------------------------------------------------------
+# platforms
+# -----------------------------------------------------------------------------
+# enabled:              false = never scheduled, never published
+# publisher:            dryrun | manual | <adapter name>
+#   dryrun -> log only
+#   manual -> emit a ready-to-paste file in var/outbox/ for a human to post
+# daily_limit:          hard cap per account per calendar day (local timezone)
+# min_interval_minutes: minimum gap between two posts on the same account
+# jitter_minutes:       randomness applied to scheduling, to avoid a robotic cadence
+# active_hours:         [start, end) in local time
+# -----------------------------------------------------------------------------
+platforms:
+  x:
+    enabled: true
+    publisher: manual
+    accounts: [main]
+    daily_limit: 5
+    weekly_limit: 25
+    min_interval_minutes: 90
+    jitter_minutes: 35
+    active_hours: [8, 23]
+    max_retries: 3
+    retry_backoff_seconds: 30
+
+  threads:
+    enabled: true
+    publisher: manual
+    accounts: [main]
+    daily_limit: 5
+    weekly_limit: 25
+    min_interval_minutes: 90
+    jitter_minutes: 35
+    active_hours: [8, 23]
+
+  note:
+    enabled: true
+    publisher: manual
+    accounts: [main]
+    daily_limit: 1
+    weekly_limit: 4
+    min_interval_minutes: 720
+    jitter_minutes: 90
+    active_hours: [9, 21]
+
+  youtube:
+    enabled: false          # turn on after you have watched the other channels for a while
+    publisher: manual
+    accounts: [main]
+    daily_limit: 2
+    weekly_limit: 8
+    min_interval_minutes: 240
+    jitter_minutes: 60
+    active_hours: [10, 22]
+    require_ai_disclosure: true
+    disclosure_text: "この動画にはAIで生成した素材が含まれます"
+
+  adobe_stock:
+    enabled: false
+    publisher: manual
+    accounts: [main]
+    daily_limit: 10
+    weekly_limit: 50
+    min_interval_minutes: 15
+    jitter_minutes: 10
+    active_hours: [9, 23]
+    require_ai_disclosure: true
+    disclosure_text: "Generated with AI"
+
+# -----------------------------------------------------------------------------
+# anomaly detection -> alerting and automatic halt
+# -----------------------------------------------------------------------------
+anomaly:
+  consecutive_failure_threshold: 3   # this many failures in a row halts the platform
+  auto_halt_on_failures: true
+  reach_drop_ratio: 0.4              # alert when a day's reach < 40% of the recent median
+  reach_min_samples: 5
+  quota_warn_ratio: 0.8              # warn at 80% of the daily cap
+  warning_keywords:
+    - suspend
+    - suspended
+    - violation
+    - strike
+    - restricted
+    - shadowban
+    - policy violation
+    - アカウント停止
+    - 利用制限
+    - 違反
+    - 警告
+    - 凍結
+
+# -----------------------------------------------------------------------------
+# automated quality screening
+# -----------------------------------------------------------------------------
+quality:
+  max_similarity: 0.75        # >= this vs any recent item on the same channel = blocked
+  similarity_lookback: 200
+  min_distinct_hashtags: 0
+  min_chars:
+    social_post: 60
+  max_chars:
+    social_post: 280
+  banned_artifacts:
+    - "lorem ipsum"
+    - "as an ai"
+    - "as an ai language model"
+    - "[insert"
+    - "todo:"
+    - "私はaiアシスタント"
+
+# -----------------------------------------------------------------------------
+# legal / platform policy screening
+# -----------------------------------------------------------------------------
+# Extra deny-list terms belong in config/policy/*.yaml (gitignored), so you can
+# add a client name or a trademark without touching this file.
+policy:
+  require_affiliate_disclosure: true
+  affiliate_markers: ["#PR", "#広告", "[PR]", "広告", "アフィリエイト広告を含みます"]
+  affiliate_link_hosts: ["a8.net", "px.a8.net", "rentracks", "afi-b.com", "moshimo"]
+  banned_terms: []
+  banned_patterns: []
+  real_person_terms: []
+  trademark_terms: []
+
+# -----------------------------------------------------------------------------
+# generation
+# -----------------------------------------------------------------------------
+generation:
+  provider: mock             # mock | claude_cli | anthropic
+  model: claude-opus-5
+  max_pending_per_channel: 30   # backpressure: stop generating when review lags
+  timeout_seconds: 120
+  themes:
+    - AIを使った業務効率化
+    - 副業を続ける仕組みづくり
+    - 個人開発の記録
+    - 学習時間の作り方
+    - 情報整理と記録の習慣
+  angles: []   # empty = use the built-in angle list
+  tones: []    # empty = use the built-in tone list
+
+# -----------------------------------------------------------------------------
+# notifications
+# -----------------------------------------------------------------------------
+notify:
+  channels: [console]        # console | discord | slack (several may be listed)
+  discord_webhook_url: ${ENV:DISCORD_WEBHOOK_URL}
+  slack_webhook_url: ${ENV:SLACK_WEBHOOK_URL}
+  min_level: warning         # debug | info | warning | error | critical

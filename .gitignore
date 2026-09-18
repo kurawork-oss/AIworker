@@ -1,0 +1,30 @@
+# --- secrets / local config -------------------------------------------------
+.env
+.env.*
+!.env.example
+config/config.yaml
+config/policy/*.yaml
+!config/policy/*.example.yaml
+config/*.local.yaml
+
+# --- runtime state ----------------------------------------------------------
+var/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+STOP
+
+# --- python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- misc -------------------------------------------------------------------
+.DS_Store
+node_modules/

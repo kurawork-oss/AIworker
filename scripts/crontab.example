@@ -1,0 +1,31 @@
+# AIworker crontab の例
+#   crontab -e で貼り付け、/path/to/AIworker を実際のパスに置き換えてください。
+#
+# 注意: `aiworker review`（承認）は cron に入れません。そこが人間の担当です。
+
+SHELL=/bin/bash
+AIWORKER=/path/to/AIworker
+
+# 朝6時: 生成。承認待ちキューが満杯なら自動でスキップされます（背圧制御）
+0 6 * * *  cd $AIWORKER && ./scripts/aiworker generate --channel social_post --count 3 -q
+
+# 週1回・月曜7時: note記事の下書きを1本
+0 7 * * 1  cd $AIWORKER && ./scripts/aiworker generate --channel note_article --count 1 -q
+
+# 朝8時5分: 承認済みのコンテンツに投稿枠を割り当てる
+5 8 * * *  cd $AIWORKER && ./scripts/aiworker plan -q
+
+# 毎時: 枠が来たジョブを実行する
+0 * * * *  cd $AIWORKER && ./scripts/aiworker publish -q
+
+# 夜20時: 日次レポートを通知先に送る
+0 20 * * * cd $AIWORKER && ./scripts/aiworker report --days 1 --notify -q
+
+# 日曜19時: 週次レポート
+0 19 * * 0 cd $AIWORKER && ./scripts/aiworker report --days 7 --notify -q
+
+# 毎日2時: DBのバックアップ（曜日ごとに7世代）
+0 2 * * *  cd $AIWORKER && cp var/aiworker.db "var/backup-$(date +\%u).db"
+
+# 日曜3時: 保持期間を過ぎたログとイベントを削除
+0 3 * * 0  cd $AIWORKER && ./scripts/aiworker prune -q

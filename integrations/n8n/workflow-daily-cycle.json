@@ -1,0 +1,155 @@
+{
+  "name": "AIworker daily cycle",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "0 6 * * *" } ] }
+      },
+      "id": "trigger-generate",
+      "name": "06:00 generate",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [ -260, -160 ]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "5 8 * * *" } ] }
+      },
+      "id": "trigger-plan",
+      "name": "08:05 plan",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [ -260, 20 ]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "0 * * * *" } ] }
+      },
+      "id": "trigger-publish",
+      "name": "hourly publish",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [ -260, 200 ]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "cronExpression", "expression": "0 20 * * *" } ] }
+      },
+      "id": "trigger-report",
+      "name": "20:00 report",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [ -260, 380 ]
+    },
+    {
+      "parameters": {
+        "command": "cd {{ $env.AIWORKER_HOME }} && ./scripts/aiworker generate --channel social_post --count 3 -q"
+      },
+      "id": "cmd-generate",
+      "name": "aiworker generate",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [ 20, -160 ],
+      "notes": "承認待ちキューが満杯なら、このコマンド自身が何も生成せずに終了します（背圧制御）。"
+    },
+    {
+      "parameters": {
+        "command": "cd {{ $env.AIWORKER_HOME }} && ./scripts/aiworker plan -q"
+      },
+      "id": "cmd-plan",
+      "name": "aiworker plan",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [ 20, 20 ],
+      "notes": "承認済みのコンテンツにだけ投稿枠を割り当てます。未承認は対象外です。"
+    },
+    {
+      "parameters": {
+        "command": "cd {{ $env.AIWORKER_HOME }} && ./scripts/aiworker publish -q"
+      },
+      "id": "cmd-publish",
+      "name": "aiworker publish",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [ 20, 200 ],
+      "notes": "公開の直前に、停止状態・投稿枠・承認状態を再確認します。n8n 側でのチェックは不要です。"
+    },
+    {
+      "parameters": {
+        "command": "cd {{ $env.AIWORKER_HOME }} && ./scripts/aiworker report --days 1 -q"
+      },
+      "id": "cmd-report",
+      "name": "aiworker report",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [ 20, 380 ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "exit-code-nonzero",
+              "operator": { "type": "number", "operation": "notEquals" },
+              "leftValue": "={{ $json.exitCode }}",
+              "rightValue": 0
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-failed",
+      "name": "コマンドが失敗した?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [ 320, 110 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ content: '🛑 AIworker のコマンドが失敗しました\\nnode: ' + $json.nodeName + '\\nexit: ' + $json.exitCode + '\\n' + String($json.stderr || '').slice(0, 1200) }) }}",
+        "options": {}
+      },
+      "id": "notify-failure",
+      "name": "失敗を通知",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 580, 40 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ content: '```\\n' + String($json.stdout || '').slice(0, 1800) + '\\n```' }) }}",
+        "options": {}
+      },
+      "id": "notify-report",
+      "name": "レポートを通知",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 320, 380 ]
+    }
+  ],
+  "connections": {
+    "06:00 generate": { "main": [ [ { "node": "aiworker generate", "type": "main", "index": 0 } ] ] },
+    "08:05 plan": { "main": [ [ { "node": "aiworker plan", "type": "main", "index": 0 } ] ] },
+    "hourly publish": { "main": [ [ { "node": "aiworker publish", "type": "main", "index": 0 } ] ] },
+    "20:00 report": { "main": [ [ { "node": "aiworker report", "type": "main", "index": 0 } ] ] },
+    "aiworker generate": { "main": [ [ { "node": "コマンドが失敗した?", "type": "main", "index": 0 } ] ] },
+    "aiworker plan": { "main": [ [ { "node": "コマンドが失敗した?", "type": "main", "index": 0 } ] ] },
+    "aiworker publish": { "main": [ [ { "node": "コマンドが失敗した?", "type": "main", "index": 0 } ] ] },
+    "aiworker report": { "main": [ [ { "node": "レポートを通知", "type": "main", "index": 0 } ] ] },
+    "コマンドが失敗した?": { "main": [ [ { "node": "失敗を通知", "type": "main", "index": 0 } ], [] ] }
+  },
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}

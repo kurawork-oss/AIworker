@@ -1,0 +1,35 @@
+# Extra deny-list terms merged into policy.* at load time.
+#
+#   cp config/policy/banned_terms.example.yaml config/policy/banned_terms.yaml
+#
+# Matching is case-insensitive substring matching, so keep entries specific
+# enough not to fire on ordinary words. Real (non-.example) files in this
+# directory are gitignored: put client names and anything you would rather not
+# publish in the real file.
+#
+# When any real *.yaml exists here, the .example file is ignored.
+
+# Words that must never appear in generated output.
+banned_terms:
+  - 絶対に稼げる
+  - 誰でも簡単に月収
+  - 完全自動で不労所得
+  - 元本保証
+
+# Python regular expressions, matched case-insensitively.
+banned_patterns:
+  - "月収\\s*\\d{3,}\\s*万円(保証|確定)"
+  - "(?i)guaranteed\\s+\\d+%\\s+returns?"
+
+# Names of real people. Referencing them in a prompt or a title is a likeness /
+# publicity-rights risk, so it is a hard block rather than a warning.
+real_person_terms: []
+
+# Brands and trademarks you must not depict or imply an association with.
+trademark_terms:
+  - Disney
+  - Ghibli
+  - ジブリ
+  - Pokemon
+  - ポケモン
+  - Marvel

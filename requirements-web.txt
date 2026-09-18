@@ -1,0 +1,6 @@
+# Optional: the approval / dashboard web UI (`aiworker serve`).
+# Not needed if you only use the CLI approval gate (`aiworker review`).
+-r requirements.txt
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9
