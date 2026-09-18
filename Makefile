@@ -1,7 +1,7 @@
 PY ?= python3
 export PYTHONPATH := src
 
-.PHONY: help init doctor test lint generate review status report clean
+.PHONY: help init doctor test check smoke hygiene ui generate review status report clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -14,6 +14,17 @@ doctor:  ## 設定を検証
 
 test:  ## テストを実行
 	$(PY) -m pytest
+
+check: test hygiene ui  ## CIと同じ検査をローカルで実行（smoke は別途）
+
+hygiene:  ## 秘密情報・実データ・危険な既定値が混入していないか
+	$(PY) scripts/check_repo_hygiene.py
+
+ui:  ## 承認UIの全画面が描画できるか
+	$(PY) scripts/check_web_ui.py
+
+smoke:  ## インストール済みパッケージに対するE2E（要 pip install .）
+	./scripts/smoke_test.sh
 
 generate:  ## サンプル生成 (social_post 3件)
 	$(PY) -m aiworker generate --channel social_post --count 3

@@ -21,6 +21,7 @@ from typing import Any
 import yaml
 
 from .errors import ConfigError
+from .resources import bundled
 
 _ENV_REF = re.compile(r"^\$\{ENV:([A-Za-z_][A-Za-z0-9_]*)(?::([^}]*))?\}$")
 
@@ -234,10 +235,19 @@ def config_path(explicit: str | Path | None = None) -> Path:
     env = os.environ.get("AIWORKER_CONFIG")
     if env:
         return Path(env)
+    # The working directory wins over the source tree. With an editable install
+    # from a clone, REPO_ROOT is that clone -- so checking it first would make
+    # `cd ~/myops && aiworker status` silently read the clone's config instead
+    # of the one in ~/myops.
+    cwd_local = Path.cwd() / "config" / "config.yaml"
+    if cwd_local.exists():
+        return cwd_local
     local = REPO_ROOT / "config" / "config.yaml"
     if local.exists():
         return local
-    return REPO_ROOT / "config" / "config.example.yaml"
+    # Nothing configured yet: fall back to the shipped example, which is safe
+    # to run (dry_run on, every publisher inert).
+    return bundled("config.example.yaml")
 
 
 def load_settings(path: str | Path | None = None, *, load_env: bool = True) -> Settings:

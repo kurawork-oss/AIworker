@@ -21,6 +21,11 @@ aiworker = "aiworker.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Templates the CLI reads at runtime (`init`, `checklist`). Without these the
+# first two commands an operator runs fail on a `pip install`ed package.
+[tool.setuptools.package-data]
+aiworker = ["data/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

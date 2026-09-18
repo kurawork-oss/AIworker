@@ -23,6 +23,7 @@ from .core import clock, db
 from .core.config import REPO_ROOT, Settings, load_settings
 from .core.errors import AIWorkerError, ConfigError
 from .core.logging_setup import get_logger, purge_old_logs, setup_logging
+from .core.resources import read_bundled
 from .core.models import Severity, Status
 from .generators.prompts import SPECS
 from .generators.service import GenerationService
@@ -97,17 +98,33 @@ def _print_items(items, settings: Settings, *, verbose: bool = False) -> None:
 # commands
 # --------------------------------------------------------------------------
 def cmd_init(args) -> int:
-    cfg_dst = REPO_ROOT / "config" / "config.yaml"
-    cfg_src = REPO_ROOT / "config" / "config.example.yaml"
+    # Write into the current directory, not the package's install location:
+    # `pip install aiworker && mkdir myops && cd myops && aiworker init` has to
+    # set up *there*.
+    base = Path(args.dir).expanduser() if getattr(args, "dir", None) else Path.cwd()
     created = []
-    if not cfg_dst.exists() and cfg_src.exists():
-        cfg_dst.write_text(cfg_src.read_text(encoding="utf-8"), encoding="utf-8")
+
+    cfg_dst = base / "config" / "config.yaml"
+    if not cfg_dst.exists():
+        cfg_dst.parent.mkdir(parents=True, exist_ok=True)
+        cfg_dst.write_text(read_bundled("config.example.yaml"), encoding="utf-8")
         created.append(str(cfg_dst))
-    env_dst, env_src = REPO_ROOT / ".env", REPO_ROOT / ".env.example"
-    if not env_dst.exists() and env_src.exists():
-        env_dst.write_text(env_src.read_text(encoding="utf-8"), encoding="utf-8")
+
+    policy_dst = base / "config" / "policy" / "banned_terms.example.yaml"
+    if not policy_dst.exists():
+        policy_dst.parent.mkdir(parents=True, exist_ok=True)
+        policy_dst.write_text(read_bundled("banned_terms.example.yaml"), encoding="utf-8")
+        created.append(str(policy_dst))
+
+    env_dst = base / ".env"
+    if not env_dst.exists():
+        env_dst.write_text(read_bundled("env.example"), encoding="utf-8")
         env_dst.chmod(0o600)
         created.append(str(env_dst))
+
+    # `init` just wrote the config, so later steps must load *that* one.
+    if "AIWORKER_CONFIG" not in os.environ and not getattr(args, "config", None):
+        os.environ["AIWORKER_CONFIG"] = str(cfg_dst)
 
     ctx = Context(args)
     try:
@@ -561,12 +578,12 @@ def cmd_prune(args) -> int:
 
 
 def cmd_checklist(args) -> int:
-    path = REPO_ROOT / "docs" / "05-risk-checklist.md"
-    if path.exists():
-        print(path.read_text(encoding="utf-8"))
-        return 0
-    print("docs/05-risk-checklist.md が見つかりません", file=sys.stderr)
-    return 1
+    try:
+        print(read_bundled("risk-checklist.md"))
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def cmd_serve(args) -> int:
@@ -593,6 +610,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser("init", help="DBと設定ファイルを初期化する")
+    sp.add_argument("--dir", help="初期化先のディレクトリ（既定: カレントディレクトリ）")
     sp.set_defaults(func=cmd_init)
 
     sp = sub.add_parser("doctor", help="設定と前提条件を検証する")

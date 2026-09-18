@@ -1,5 +1,7 @@
 # AIworker
 
+[![CI](https://github.com/kurawork-oss/AIworker/actions/workflows/ci.yml/badge.svg)](https://github.com/kurawork-oss/AIworker/actions/workflows/ci.yml)
+
 リスクヘッジを最優先にした、**人間の承認ゲート付き**コンテンツ運用システム。
 
 AIで生成した投稿・記事・台本・素材メタデータを、規約チェックと重複検知と投稿上限管理を
@@ -109,13 +111,28 @@ aiworker serve                 # Web UI（任意、localhost限定）
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                # 全テスト
-make help                       # よく使う操作
+make test      # 全テスト
+make check     # テスト + リポジトリ衛生 + UI描画（CIと同じ）
+make smoke     # インストール済みパッケージに対するE2E（要 pip install .）
+make help      # よく使う操作
 ```
 
 テストはガードレールと承認ゲートに厚く配分しています。
 特に `tests/test_pipeline.py::test_unapproved_content_is_never_published` が
 このシステムの中心的な不変条件です。
+
+### CI が見ているもの
+
+| ジョブ | 内容 |
+|--------|------|
+| `test` | Python 3.11 / 3.12 / 3.13 でテスト |
+| `smoke` | **インストールした**パッケージに対してCLIを端から端まで実行。単体テストでは検出できない同梱漏れ・エントリポイント破損を捕まえます |
+| `hygiene` | 秘密情報・実データの混入、配布する既定値が安全か（`dry_run: true` と投稿しないpublisher） |
+| `web` | 承認UIの全9画面が描画できるか |
+
+`smoke` を分けているのは実績があるためです。`aiworker init` と `aiworker checklist`
+（運用者が最初に打つ2つ）が、`pip install` 経由では壊れていたことがありました。
+単体テストは `src/` から直接importするので、この種の不具合を検出できません。
 
 ## 技術スタック
 

@@ -3,6 +3,7 @@
 ```
 AIworker/
 ├── README.md                     全体の入口。5分で動かすまでの手順
+├── .github/workflows/ci.yml      CI（テスト / E2E / リポジトリ衛生 / UI描画）
 ├── Makefile                      make init / doctor / test / report
 ├── pyproject.toml                パッケージ定義（`pip install -e .` で aiworker コマンド）
 ├── requirements.txt              コア依存（PyYAML のみ）
@@ -32,17 +33,27 @@ AIworker/
 │
 ├── scripts/
 │   ├── aiworker                  インストールせずに実行するラッパー
-│   └── crontab.example           cron 設定例
+│   ├── crontab.example           cron 設定例
+│   ├── smoke_test.sh             インストール済みパッケージに対するE2E
+│   ├── check_repo_hygiene.py     秘密情報・実データ・危険な既定値の混入チェック
+│   └── check_web_ui.py           承認UIの全画面が描画できるかのチェック
 │
 ├── src/aiworker/
 │   ├── cli.py                    コマンドライン（人間の主な操作面）
 │   ├── __main__.py               python -m aiworker
+│   │
+│   ├── data/                     実行時に読むテンプレート（wheelに同梱）
+│   │   ├── config.example.yaml   ← リポジトリ直下のコピー。テストで同一性を保証
+│   │   ├── banned_terms.example.yaml
+│   │   ├── env.example
+│   │   └── risk-checklist.md
 │   │
 │   ├── core/                     土台。他の層はここにしか依存しない
 │   │   ├── config.py             設定読込・検証・${ENV:} 解決
 │   │   ├── db.py                 SQLite スキーマとクエリ
 │   │   ├── models.py             ContentItem / PublishJob / Status / Channel
 │   │   ├── clock.py              時刻（保存はUTC、表示はローカル）
+│   │   ├── resources.py          同梱テンプレートの解決（インストール先を問わず）
 │   │   ├── logging_setup.py      JSON Lines ログ + 30日保持
 │   │   └── errors.py             例外の型階層（retryable かどうかが型で分かる）
 │   │
@@ -91,7 +102,8 @@ AIworker/
 │   ├── test_pipeline.py          ★E2E：未承認は絶対に公開されない
 │   ├── test_anomaly.py           異常検知
 │   ├── test_revenue.py           収益取込と集計
-│   └── test_cli.py               各コマンドのスモークテスト
+│   ├── test_resources.py         同梱テンプレートの存在と、リポジトリ側との同一性
+│   └── test_cli.py               各コマンドと承認UIのスモークテスト
 │
 └── var/                          実行時の状態（全て gitignore）
     ├── aiworker.db               SQLite 本体。バックアップ対象はこれ1つ
