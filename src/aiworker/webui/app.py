@@ -1,316 +1,301 @@
 """Optional approval / dashboard web UI.
 
-Server-rendered HTML, no JavaScript framework, no build step. The whole point
-of this UI is to let a person clear the approval queue from a phone in a few
-minutes; a single-page app would add a toolchain and a deploy story for no gain
-at that size.
+A phone-shaped operations app, server-rendered. No JavaScript framework and no
+build step: it is small enough that a toolchain would cost more than it saves,
+and it must run with `pip install fastapi uvicorn` and nothing else.
 
-**No authentication.** It binds to 127.0.0.1 and refuses to listen on a public
-interface without ``AIWORKER_ALLOW_PUBLIC_BIND=1``, because a queue that anyone
-on the network can approve from is not an approval gate. Put it behind an SSH
-tunnel or a reverse proxy with auth if you need remote access.
+Five ways to work the same queue -- list, pipeline, one-at-a-time, dashboard,
+conversation -- all of them going through `approval.service`, so the guardrail
+checks, the audit record and the override rules do not vary by screen.
+
+**No authentication.** It binds to 127.0.0.1 and refuses a public interface
+without ``AIWORKER_ALLOW_PUBLIC_BIND=1``, because a queue anyone on the network
+can approve from is not an approval gate. Use an SSH tunnel, or a reverse proxy
+that authenticates, for remote access.
 """
 
 from __future__ import annotations
 
-import html
 import os
 from urllib.parse import quote
 
 # Imported at module scope rather than inside create_app(): this module uses
 # `from __future__ import annotations`, so FastAPI resolves route annotations
-# against module globals. A function-local import leaves `Request` unresolvable
-# and every form POST fails with a 422.
+# against module globals. A function-local import leaves `Request`
+# unresolvable and every form POST fails with a 422.
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..approval import service as approval
 from ..core import clock, db
-from ..core.config import Settings, load_settings
+from ..core.config import load_settings
 from ..core.models import Status
-from ..guard import killswitch, quota
-from ..revenue import report as reporting
-
-STYLE = """
-:root{--bg:#fbfbfa;--fg:#1c1b1a;--muted:#6b6862;--line:#e3e1dc;--accent:#2f6f4f;
---warn:#8a5a00;--bad:#a3342a;--card:#fff}
-@media (prefers-color-scheme:dark){:root{--bg:#171716;--fg:#ececea;--muted:#9a968e;
---line:#32312e;--accent:#6fbf8f;--warn:#d9a441;--bad:#e4796c;--card:#1f1f1d}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,-apple-system,
-"Hiragino Sans","Noto Sans JP",sans-serif}
-header{position:sticky;top:0;background:var(--card);border-bottom:1px solid var(--line);
-padding:12px 16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
-header a{color:var(--fg);text-decoration:none;font-weight:600;padding:4px 10px;
-border:1px solid var(--line);border-radius:8px}
-header a:hover{background:var(--bg)}
-header .halt{color:var(--bad);font-weight:700}
-main{max-width:860px;margin:0 auto;padding:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;
-padding:14px;margin-bottom:12px}
-.meta{color:var(--muted);font-size:13px}
-.badge{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;
-border:1px solid var(--line);margin-right:6px}
-.badge.bad{color:var(--bad);border-color:var(--bad)}
-.badge.warn{color:var(--warn);border-color:var(--warn)}
-.badge.ok{color:var(--accent);border-color:var(--accent)}
-pre{white-space:pre-wrap;word-break:break-word;font:13px/1.6 ui-monospace,monospace;
-background:transparent;margin:8px 0}
-button{font:inherit;padding:7px 14px;border-radius:8px;border:1px solid var(--line);
-background:var(--card);color:var(--fg);cursor:pointer}
-button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-button.danger{border-color:var(--bad);color:var(--bad)}
-/* The override control is deliberately the least prominent thing on the page.
-   A blocked item is one a guardrail refused; the affordance to ignore that
-   must not look like the obvious next tap. */
-button.override{border-color:var(--bad);color:var(--bad);background:transparent;
-font-size:13px;padding:6px 12px}
-.field{display:block;margin-bottom:6px}
-.field > span{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
-.action{border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px}
-.danger-zone{border:1px dashed var(--bad);border-radius:10px;padding:12px;margin-top:14px}
-.danger-zone > .meta{color:var(--bad)}
-.notice{border-left:3px solid var(--warn);padding-left:10px}
-form.inline{display:inline}
-input[type=text]{font:inherit;padding:7px;border:1px solid var(--line);border-radius:8px;
-background:var(--bg);color:var(--fg);width:100%;max-width:420px}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
-a.item{color:inherit;text-decoration:none;display:block}
-a.item:hover{opacity:.75}
-"""
+from ..guard import killswitch
+from . import views
+from .components import (
+    badges, channel_label, e, is_blocked, page, status_label,
+)
 
 
-def _page(title: str, body: str, settings: Settings, halts: list) -> str:
-    halt_html = ""
-    if halts:
-        halt_html = '<span class="halt">🛑 ' + html.escape(
-            "; ".join(h.describe() for h in halts)
-        ) + "</span>"
-    return f"""<!doctype html><html lang="ja"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{html.escape(title)}</title><style>{STYLE}</style></head><body>
-<header><a href="/">承認キュー</a><a href="/dashboard">ダッシュボード</a>
-<span class="meta">{html.escape(settings.timezone)}{' · dry-run' if settings.dry_run else ''}</span>
-{halt_html}</header><main>{body}</main></body></html>"""
+def _decision_card(item, blocked: bool, next_url: str = "") -> str:
+    """The approve / revise / reject controls.
 
-
-#: The rest of the UI is Japanese; raw enum values in the one place a reviewer
-#: looks fastest were a needless translation step for them to do in their head.
-STATUS_LABELS = {
-    Status.PENDING_REVIEW.value: "承認待ち",
-    Status.BLOCKED.value: "ブロック",
-    Status.NEEDS_REVISION.value: "修正依頼中",
-    Status.APPROVED.value: "承認済",
-    Status.REJECTED.value: "却下",
-    Status.SCHEDULED.value: "予約済",
-    Status.PUBLISHED.value: "公開済",
-    Status.FAILED.value: "失敗",
-}
-
-
-def status_label(status: str) -> str:
-    return STATUS_LABELS.get(status, status)
-
-
-def _badges(item) -> str:
-    cls = {Status.BLOCKED.value: " bad", Status.APPROVED.value: " ok",
-           Status.PUBLISHED.value: " ok", Status.FAILED.value: " bad",
-           Status.NEEDS_REVISION.value: " warn"}.get(item.status, "")
-    out = [f'<span class="badge{cls}">{html.escape(status_label(item.status))}</span>']
-    if item.policy_report.get("blocking"):
-        out.append('<span class="badge bad">規約</span>')
-    if not item.quality_report.get("ok", True):
-        out.append('<span class="badge warn">品質</span>')
-    if item.similarity >= 0.6:
-        out.append(f'<span class="badge warn">類似 {item.similarity:.0%}</span>')
-    return "".join(out)
-
-
-def _decision_card(item, blocked: bool) -> str:
-    """Render the approve / revise / reject controls.
-
-    On a blocked item the ordering and the styling both change. The guardrails
+    On a blocked item both the ordering and the styling change. The guardrails
     already refused this content, so the prominent actions are the ones that
-    respect that refusal (send it back, or reject it), and the override is
-    pushed into a separate, visibly fenced-off block. Making "ignore the
-    guardrail" the big green button would be an approval gate that argues for
-    its own bypass.
+    respect that refusal, and the override sits in a separate fenced-off block.
+    Making "ignore the guardrail" the big green button would be an approval
+    gate that argues for its own bypass.
     """
-    revise = f'''
-<form class="action" method="post" action="/item/{item.id}/revise">
+    nxt = f'<input type="hidden" name="next" value="{e(next_url)}">' if next_url else ""
+    revise = f"""
+<form class="action-block" method="post" action="/item/{item.id}/revise">{nxt}
   <label class="field"><span>修正内容（必須）</span>
     <input type="text" name="note" placeholder="例: 冒頭を具体的な数字に変える"></label>
-  <button class="{'primary' if blocked else ''}" type="submit">修正を依頼</button>
-</form>'''
-    reject = f'''
-<form class="action" method="post" action="/item/{item.id}/reject">
+  <button class="{'brand' if blocked else ''}" type="submit">修正を依頼</button>
+</form>"""
+    reject = f"""
+<form class="action-block" method="post" action="/item/{item.id}/reject">{nxt}
   <label class="field"><span>却下理由（任意）</span>
     <input type="text" name="note" placeholder="例: テーマが直近と重複"></label>
-  <button class="danger" type="submit">却下する</button>
-</form>'''
+  <button class="reject" type="submit">却下する</button>
+</form>"""
 
     if not blocked:
-        approve = f'''
-<form class="action" method="post" action="/item/{item.id}/approve">
+        approve = f"""
+<form class="action-block" method="post" action="/item/{item.id}/approve">{nxt}
   <label class="field"><span>メモ（任意）</span>
     <input type="text" name="note" placeholder="承認時のメモ"></label>
-  <button class="primary" type="submit">承認する</button>
-</form>'''
-        return f'<div class="card"><b>判断</b>{approve}{revise}{reject}</div>'
+  <button class="approve" type="submit">承認する</button>
+</form>"""
+        return f'<div class="card"><div class="section" style="margin-top:0">判断</div>' \
+               f'{approve}{revise}{reject}</div>'
 
-    override = f'''
+    override = f"""
 <div class="danger-zone">
   <div class="meta">⚠ この項目はガードレールがブロックしています。
   上書き承認は <b>approve_override</b> として、理由つきで監査ログに残ります。
-  上のガードレール判定を読んだうえで、それでも問題ないと判断できる場合だけ使ってください。</div>
-  <form method="post" action="/item/{item.id}/approve">
+  上の判定を読んだうえで、それでも問題ないと判断できる場合だけ使ってください。</div>
+  <form method="post" action="/item/{item.id}/approve" style="margin-top:10px">{nxt}
     <label class="field"><span>上書きする理由（必須）</span>
       <input type="text" name="note" placeholder="なぜこの指摘が当てはまらないのか"></label>
     <button class="override" type="submit">理由を記録して上書き承認</button>
   </form>
-</div>'''
-    return ('<div class="card"><b>判断</b>'
-            '<div class="meta notice">ガードレールがブロックした項目です。'
+</div>"""
+    return ('<div class="card"><div class="section" style="margin-top:0">判断</div>'
+            '<div class="notice meta">ガードレールがブロックした項目です。'
             'まず修正依頼か却下を検討してください。</div>'
             f'{revise}{reject}{override}</div>')
 
 
+def detail_body(conn, settings, item, msg: str = "") -> str:
+    findings = "".join(
+        f'<div class="meta">{"🛑" if f["severity"] == "blocking" else "⚠"} '
+        f'{e(f["detail"])}</div>'
+        for f in item.policy_report.get("findings", [])
+    ) + "".join(
+        f'<div class="meta">{"🛑" if i["fatal"] else "⚠"} {e(i["detail"])}</div>'
+        for i in item.quality_report.get("issues", [])
+    ) or '<div class="meta">指摘なし</div>'
+
+    meta_rows = "".join(
+        f'<div class="barrow" style="grid-template-columns:104px 1fr">'
+        f'<span class="muted">{e(k)}</span><span class="meta">{e(str(v))[:300]}</span></div>'
+        for k, v in sorted(item.meta.items()) if k != "schema_keys"
+    ) or '<div class="meta">なし</div>'
+
+    history = "".join(
+        f'<div class="barrow" style="grid-template-columns:104px 1fr">'
+        f'<span class="muted">'
+        f'{e(clock.fmt_local(clock.parse_iso(h["created_at"]), settings.timezone, "%m/%d %H:%M"))}'
+        f'</span><span class="meta">{e(h["action"])} — {e(h["actor"])} '
+        f'{e(h["note"])}</span></div>'
+        for h in db.approval_history(conn, item.id)
+    )
+
+    blocked = is_blocked(item)
+    return f"""
+<div class="card">
+  <div class="row wrap">{badges(item)}</div>
+  <h3 style="margin:10px 0 4px">{e(item.title or item.uid)}</h3>
+  <div class="muted">#{item.id} {e(item.uid)} · {e(channel_label(item.channel))} ·
+    {e(item.platform)}／{e(item.account)}</div>
+  <div class="muted">{e(item.theme)} / {e(item.angle)} / {e(item.tone)}</div>
+  <pre style="margin-top:12px">{e(item.body)}</pre>
+</div>
+
+<div class="card">
+  <div class="section" style="margin-top:0">ガードレール判定</div>
+  <div class="muted" style="margin-bottom:6px">類似度 {item.similarity:.0%}
+    （最も近い項目: {e(item.quality_report.get("nearest_uid") or "なし")}）</div>
+  {findings}
+</div>
+
+<div class="card"><div class="section" style="margin-top:0">メタデータ</div>{meta_rows}</div>
+{_decision_card(item, blocked)}
+{f'<div class="card"><div class="section" style="margin-top:0">履歴</div>{history}</div>'
+ if history else ""}
+<div class="card"><a class="btn ghost" href="/">← キューに戻る</a></div>"""
+
+
 def create_app(config: str | None = None):
     settings = load_settings(config)
-    app = FastAPI(title="AIworker approval", docs_url=None, redoc_url=None)
+    app = FastAPI(title=f"AIworker 承認UI", docs_url=None, redoc_url=None)
 
     def conn():
         return db.init_db(settings.db_path)
 
     def actor(request: Request) -> str:
-        return os.environ.get("AIWORKER_ACTOR") or request.client.host or "webui"
+        return os.environ.get("AIWORKER_ACTOR") or (request.client.host if request.client
+                                                    else "webui")
 
+    def halts(c):
+        return killswitch.active_halts(c, settings.state_dir)
+
+    def redirect(target: str, msg: str = "") -> RedirectResponse:
+        sep = "&" if "?" in target else "?"
+        url = f"{target}{sep}msg={quote(msg)}" if msg else target
+        return RedirectResponse(url, status_code=303)
+
+    # ---- task views ------------------------------------------------------
     @app.get("/", response_class=HTMLResponse)
-    def index(status: str = "", platform: str = ""):
+    def index(status: str = "", channel: str = "", msg: str = ""):
         c = conn()
         try:
-            items = approval.queue(
-                c, status=[status] if status else None, platform=platform or None, limit=100
-            )
-            halts = killswitch.active_halts(c, settings.state_dir)
-            counts = approval.stats(c)
-            head = (
-                '<div class="card"><b>キュー</b><div class="meta">'
-                f"承認待ち {counts['pending_review']} ／ ブロック {counts['blocked']} ／ "
-                f"修正依頼 {counts['needs_revision']} ／ 承認済 {counts['approved']} ／ "
-                f"予約 {counts['scheduled']}</div>"
-                '<div class="row">'
-                '<a href="/"><button>すべて</button></a>'
-                f'<a href="/?status={Status.PENDING_REVIEW.value}"><button>承認待ち</button></a>'
-                f'<a href="/?status={Status.BLOCKED.value}"><button>ブロック</button></a>'
-                f'<a href="/?status={Status.NEEDS_REVISION.value}"><button>修正依頼</button></a>'
-                "</div></div>"
-            )
-            cards = []
-            for it in items:
-                created = clock.fmt_local(clock.parse_iso(it.created_at), settings.timezone)
-                cards.append(
-                    f'<a class="item card" href="/item/{it.id}">{_badges(it)}'
-                    f'<div class="meta">#{it.id} {html.escape(it.uid)} · '
-                    f"{html.escape(it.platform)} · {html.escape(it.channel)} · {created}</div>"
-                    f"<div>{html.escape(it.preview(90))}</div></a>"
-                )
-            body = head + ("".join(cards) or '<div class="card">対象はありません</div>')
-            return HTMLResponse(_page("承認キュー", body, settings, halts))
+            return HTMLResponse(page("承認キュー",
+                                     views.list_view(c, settings, status=status,
+                                                     channel=channel),
+                                     settings, tab="tasks", switch_path="/",
+                                     halts=halts(c), toast=msg))
         finally:
             c.close()
 
+    @app.get("/flow", response_class=HTMLResponse)
+    def flow(msg: str = ""):
+        c = conn()
+        try:
+            return HTMLResponse(page("フロー", views.flow_view(c, settings), settings,
+                                     tab="tasks", switch_path="/flow", halts=halts(c),
+                                     toast=msg))
+        finally:
+            c.close()
+
+    @app.get("/swipe", response_class=HTMLResponse)
+    def swipe(index: int = 0, msg: str = ""):
+        c = conn()
+        try:
+            return HTMLResponse(page("スワイプ", views.swipe_view(c, settings, index=index),
+                                     settings, tab="tasks", switch_path="/swipe",
+                                     halts=halts(c), toast=msg))
+        finally:
+            c.close()
+
+    @app.get("/chat", response_class=HTMLResponse)
+    def chat(msg: str = ""):
+        c = conn()
+        try:
+            return HTMLResponse(page("対話", views.chat_view(c, settings), settings,
+                                     tab="tasks", switch_path="/chat", halts=halts(c),
+                                     toast=msg))
+        finally:
+            c.close()
+
+    # ---- reports & settings ---------------------------------------------
+    @app.get("/reports", response_class=HTMLResponse)
+    def reports(days: int = 7, msg: str = ""):
+        c = conn()
+        try:
+            return HTMLResponse(page("レポート", views.reports_view(c, settings, days=days),
+                                     settings, tab="reports", halts=halts(c), toast=msg))
+        finally:
+            c.close()
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_page(msg: str = ""):
+        c = conn()
+        try:
+            return HTMLResponse(page("設定", views.settings_view(c, settings, halts(c)),
+                                     settings, tab="settings", halts=halts(c), toast=msg))
+        finally:
+            c.close()
+
+    # ---- item detail -----------------------------------------------------
     @app.get("/item/{item_id}", response_class=HTMLResponse)
     def detail(item_id: int, msg: str = ""):
         c = conn()
         try:
             item = db.get_item(c, item_id)
             if not item:
-                return HTMLResponse(_page("404", '<div class="card">見つかりません</div>',
-                                          settings, []), status_code=404)
-            findings = "".join(
-                f'<div class="meta">🛑 {html.escape(f["detail"])}</div>'
-                if f["severity"] == "blocking" else
-                f'<div class="meta">⚠ {html.escape(f["detail"])}</div>'
-                for f in item.policy_report.get("findings", [])
-            ) + "".join(
-                f'<div class="meta">{"🛑" if i["fatal"] else "⚠"} '
-                f'{html.escape(i["detail"])}</div>'
-                for i in item.quality_report.get("issues", [])
-            ) or '<div class="meta">指摘なし</div>'
-            meta_rows = "".join(
-                f'<div class="meta">{html.escape(str(k))}: {html.escape(str(v))[:300]}</div>'
-                for k, v in sorted(item.meta.items()) if k not in {"schema_keys"}
-            )
-            blocked = item.policy_report.get("blocking") or not item.quality_report.get("ok", True)
-            # A silent no-op is the worst failure mode for an approval gate: the
-            # reviewer thinks they approved something they did not.
-            banner = (f'<div class="card"><b>{html.escape(msg)}</b></div>') if msg else ""
-            body = banner + f"""
-<div class="card">{_badges(item)}
-<div class="meta">#{item.id} {html.escape(item.uid)} · {html.escape(item.platform)} ·
-{html.escape(item.theme)} / {html.escape(item.angle)} / {html.escape(item.tone)}</div>
-<h3>{html.escape(item.title)}</h3><pre>{html.escape(item.body)}</pre>
-</div>
-<div class="card"><b>メタデータ</b>{meta_rows or '<div class="meta">なし</div>'}</div>
-<div class="card"><b>ガードレール判定</b>
-<div class="meta">類似度 {item.similarity:.0%}</div>{findings}</div>
-{_decision_card(item, blocked)}"""
-            return HTMLResponse(_page(item.uid, body, settings,
-                                      killswitch.active_halts(c, settings.state_dir)))
+                return HTMLResponse(
+                    page("見つかりません", '<div class="card empty">この項目は存在しません</div>',
+                         settings, tab="tasks"), status_code=404)
+            return HTMLResponse(page(item.uid, detail_body(c, settings, item), settings,
+                                     tab="tasks", halts=halts(c), toast=msg))
         finally:
             c.close()
 
+    # ---- actions ---------------------------------------------------------
     @app.post("/item/{item_id}/approve")
-    def do_approve(item_id: int, request: Request, note: str = Form("")):
+    def do_approve(item_id: int, request: Request, note: str = Form(""),
+                   next: str = Form("")):
         c = conn()
         try:
             item = db.get_item(c, item_id)
-            blocked = bool(item and (item.policy_report.get("blocking")
-                                     or not item.quality_report.get("ok", True)))
-            decision = approval.approve(c, settings, item_id, actor=actor(request), note=note,
-                                        force=blocked and bool(note.strip()))
-            msg = ("✅ 承認しました" if decision.ok else f"⚠ 承認できません: {decision.message}")
-            return RedirectResponse(f"/item/{item_id}?msg={quote(msg)}", status_code=303)
+            blocked = bool(item and is_blocked(item))
+            decision = approval.approve(c, settings, item_id, actor=actor(request),
+                                        note=note, force=blocked and bool(note.strip()))
+            msg = "✅ 承認しました" if decision.ok else f"⚠ {decision.message}"
+            return redirect(next or f"/item/{item_id}", msg)
         finally:
             c.close()
 
     @app.post("/item/{item_id}/reject")
-    def do_reject(item_id: int, request: Request, note: str = Form("")):
+    def do_reject(item_id: int, request: Request, note: str = Form(""),
+                  next: str = Form("")):
         c = conn()
         try:
-            approval.reject(c, item_id, actor=actor(request), note=note)
-            return RedirectResponse("/", status_code=303)
+            decision = approval.reject(c, item_id, actor=actor(request), note=note)
+            msg = "却下しました" if decision.ok else f"⚠ {decision.message}"
+            return redirect(next or "/", msg)
         finally:
             c.close()
 
     @app.post("/item/{item_id}/revise")
-    def do_revise(item_id: int, request: Request, note: str = Form("")):
+    def do_revise(item_id: int, request: Request, note: str = Form(""),
+                  next: str = Form("")):
         c = conn()
         try:
             decision = approval.request_revision(c, item_id, actor=actor(request), note=note)
             msg = "修正依頼を記録しました" if decision.ok else f"⚠ {decision.message}"
-            return RedirectResponse(f"/item/{item_id}?msg={quote(msg)}", status_code=303)
+            return redirect(next or f"/item/{item_id}", msg)
         finally:
             c.close()
 
-    @app.get("/dashboard", response_class=HTMLResponse)
-    def dashboard(days: int = 7):
+    @app.post("/stop")
+    def do_stop(request: Request, reason: str = Form("")):
         c = conn()
         try:
-            text = reporting.ops_report(c, settings, days=days)
-            quotas = "".join(
-                f'<div class="meta">{html.escape(s.platform)} — '
-                f'本日 {s.used_today}/{s.daily_limit} ／ '
-                f'今週 {s.used_this_week}/{s.weekly_limit} ／ 残り {s.capacity}'
-                + ('  ⚠ 上限が近い' if s.near_limit else '')
-                + '</div>'
-                for s in quota.all_states(c, settings)
-            )
-            body = (f'<div class="card"><b>投稿枠</b>{quotas}</div>'
-                    f'<div class="card"><pre>{html.escape(text)}</pre></div>')
-            return HTMLResponse(_page("ダッシュボード", body, settings,
-                                      killswitch.active_halts(c, settings.state_dir)))
+            if not reason.strip():
+                return redirect("/settings", "⚠ 停止には理由が必要です")
+            killswitch.engage(c, settings.state_dir, reason=reason.strip(),
+                              actor=actor(request))
+            return redirect("/settings", "🛑 停止しました")
+        finally:
+            c.close()
+
+    @app.post("/resume")
+    def do_resume(request: Request):
+        """Release every halt.
+
+        Deliberately not per-platform here: a phone screen is the wrong place
+        for a partial release, and the CLI (`aiworker resume --platform x`)
+        exists for that. Whoever presses this is asserting the cause is fixed.
+        """
+        c = conn()
+        try:
+            for h in killswitch.active_halts(c, settings.state_dir):
+                killswitch.release(c, settings.state_dir, actor=actor(request),
+                                   platform=None if h.scope == "global" else h.scope)
+            return redirect("/settings", "✅ 停止を解除しました")
         finally:
             c.close()
 

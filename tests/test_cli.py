@@ -112,7 +112,6 @@ import pytest  # noqa: E402
 pytest.importorskip("fastapi")
 TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
-
 CFG_PATH: list[str] = [""]
 
 
@@ -127,38 +126,138 @@ def client(tmp_path, monkeypatch):
     return TestClient(create_app(cfg))
 
 
-def test_ui_lists_the_queue(client):
-    r = client.get("/")
-    assert r.status_code == 200 and "承認待ち 2" in r.text
+def _block_item(item_id: int = 1) -> None:
+    """Make one item fail the policy guard, so blocked-item paths can be tested."""
+    from aiworker.approval import service as approval
+    from aiworker.core import db
+    from aiworker.core.config import load_settings
+
+    settings = load_settings(CFG_PATH[0])
+    conn = db.init_db(settings.db_path)
+    approval.edit(conn, settings, item_id, actor="pytest",
+                  body="この方法なら絶対に稼げます。" * 4)
+    conn.close()
 
 
-def test_ui_approves_and_says_so(client):
+# ---- the five views render ------------------------------------------------
+@pytest.mark.parametrize("path,marker", [
+    ("/", "承認待ち"),
+    ("/flow", "パイプラインの現在地"),
+    ("/swipe", "残り"),
+    ("/chat", "下書き"),
+    ("/reports", "承認待ち"),
+    ("/settings", "投稿枠の消化"),
+])
+def test_every_view_renders(client, path, marker):
+    r = client.get(path)
+    assert r.status_code == 200, path
+    assert marker in r.text, f"{path} is missing {marker!r}"
+
+
+def test_every_view_is_in_japanese(client):
+    """The operator reads this screen under time pressure; a raw enum value in
+    the middle of it is a translation step they should not have to do.
+
+    Attribute values (a `?status=blocked` link) are not what a person reads,
+    so only the visible text is checked."""
+    import re
+
+    for path in ("/", "/flow", "/swipe", "/chat", "/reports", "/settings"):
+        visible = re.sub(r"<[^>]+>", " ", client.get(path).text)
+        for raw in ("pending_review", "needs_revision", "social_post", "note_article"):
+            assert raw not in visible, f"{path} shows the raw value {raw!r}"
+
+
+def test_shell_has_the_tab_bar_and_view_switcher(client):
+    text = client.get("/").text
+    for label in ("タスク", "レポート", "設定"):
+        assert label in text
+    for label in ("リスト", "フロー", "スワイプ", "対話"):
+        assert label in text
+
+
+# ---- actions --------------------------------------------------------------
+def test_approve_from_the_list(client):
     r = client.post("/item/1/approve", data={"note": ""}, follow_redirects=True)
     assert "承認しました" in r.text
     assert "承認済" in client.get("/item/1").text
 
 
-def test_ui_records_a_revision_request(client):
-    r = client.post("/item/1/revise", data={"note": "冒頭を具体的に"}, follow_redirects=True)
+def test_revision_request(client):
+    r = client.post("/item/1/revise", data={"note": "冒頭を具体的に"},
+                    follow_redirects=True)
     assert "修正依頼を記録しました" in r.text
-    assert "修正依頼中" in r.text
 
 
-def test_ui_reports_a_refused_override_instead_of_doing_nothing(client, tmp_path):
+def test_an_empty_revision_note_is_reported_not_ignored(client):
     """A silent no-op is the worst failure mode here: the reviewer would walk
-    away believing they approved something they did not."""
+    away believing they had acted."""
     r = client.post("/item/1/revise", data={"note": "  "}, follow_redirects=True)
-    assert "⚠" in r.text, "an empty revision note must be reported, not ignored"
+    assert "⚠" in r.text
 
 
-def test_ui_rejects(client):
-    r = client.post("/item/2/reject", data={"note": "重複"}, follow_redirects=True)
-    assert r.status_code == 200
-    assert "却下" in client.get("/item/2").text
+def test_swipe_returns_to_the_deck_after_acting(client):
+    r = client.post("/item/1/approve", data={"note": "", "next": "/swipe?index=0"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/swipe")
 
 
-def test_ui_dashboard_renders(client):
-    assert "承認キュー" in client.get("/dashboard").text
+def test_chat_returns_to_the_chat_after_acting(client):
+    r = client.post("/item/1/reject", data={"note": "重複", "next": "/chat"},
+                    follow_redirects=False)
+    assert r.headers["location"].startswith("/chat")
+
+
+# ---- the guardrail stance survives every view -----------------------------
+def test_blocked_items_are_excluded_from_the_swipe_deck(client):
+    """One-tap approval is the wrong affordance for content a guardrail
+    refused. Blocked items must be handled where the reasons are on screen."""
+    _block_item(1)
+    text = client.get("/swipe").text
+    assert "スワイプ対象から外しています" in text
+    assert "ブロックを確認する" in text
+
+
+def test_the_list_offers_no_one_tap_approve_on_a_blocked_item(client):
+    _block_item(1)
+    text = client.get("/").text
+    assert "理由を確認" in text, "a blocked card must route to the reasons"
+
+
+def test_detail_does_not_make_the_override_the_primary_action(client):
+    """If the override ever becomes the prominent button again, this fails."""
+    _block_item(1)
+    text = client.get("/item/1").text
+    assert "上書き" in text, "the override must still be reachable"
+    assert 'class="override"' in text
+    assert '<button class="approve" type="submit">承認する</button>' not in text
+    assert '<button class="brand" type="submit">修正を依頼</button>' in text
+
+
+def test_chat_shows_the_block_reason_instead_of_an_approve_button(client):
+    _block_item(1)
+    text = client.get("/chat").text
+    assert "ガードレールが止めました" in text
+    assert "理由を読んで判断" in text
+
+
+# ---- kill switch from the settings screen ---------------------------------
+def test_stop_and_resume_from_the_ui(client):
+    r = client.post("/stop", data={"reason": "テスト停止"}, follow_redirects=True)
+    assert "停止しました" in r.text
+    assert "テスト停止" in client.get("/").text, "a halt must show on every screen"
+    r = client.post("/resume", data={}, follow_redirects=True)
+    assert "解除しました" in r.text
+
+
+def test_stopping_requires_a_reason(client):
+    r = client.post("/stop", data={"reason": "  "}, follow_redirects=True)
+    assert "理由が必要" in r.text
+
+
+# ---- misc -----------------------------------------------------------------
+def test_missing_item_returns_404(client):
+    assert client.get("/item/9999").status_code == 404
 
 
 def test_ui_refuses_to_bind_publicly():
@@ -169,25 +268,3 @@ def test_ui_refuses_to_bind_publicly():
 
 def test_healthz(client):
     assert client.get("/healthz").json()["ok"] is True
-
-
-def test_ui_does_not_offer_the_override_as_the_primary_action(client):
-    """On a blocked item, the prominent controls must be the ones that respect
-    the guardrail. If the override ever becomes the primary button again, this
-    fails."""
-    from aiworker.approval import service as approval
-    from aiworker.core import db
-    from aiworker.core.config import load_settings
-
-    settings = load_settings(CFG_PATH[0])
-    conn = db.init_db(settings.db_path)
-    approval.edit(conn, settings, 1, actor="pytest",
-                  body="この方法なら絶対に稼げます。" * 4)
-    conn.close()
-
-    text = client.get("/item/1").text
-    assert "上書き" in text, "the override must still be reachable"
-    assert 'class="override"' in text
-    assert '<button class="primary" type="submit">承認する</button>' not in text
-    # the primary action on a blocked item is sending it back
-    assert '<button class="primary" type="submit">修正を依頼</button>' in text

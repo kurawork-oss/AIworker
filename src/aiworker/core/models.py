@@ -97,6 +97,16 @@ class ContentItem:
         text = " ".join((self.title or self.body).split())
         return text[:width] + ("…" if len(text) > width else "")
 
+    def body_preview(self, width: int = 110) -> str:
+        """The opening of the body, never the title.
+
+        `preview()` falls back to the title, which is right for a one-line CLI
+        row but shows the same sentence twice on a card that already has a
+        heading.
+        """
+        text = " ".join(self.body.split())
+        return text[:width] + ("…" if len(text) > width else "")
+
     @property
     def full_text(self) -> str:
         """Everything a guardrail should look at: title + body + content metadata."""
