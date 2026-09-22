@@ -137,6 +137,22 @@ class GenerationConfig:
 
 
 @dataclass
+class ImageConfig:
+    """Image generation for the stock-asset channel.
+
+    `mock` is the default: offline, free, and obviously placeholder. The two
+    real backends are both free -- `cloudflare` needs no GPU and no card,
+    `local` needs a GPU but is unlimited and licence-clean for stock resale.
+    """
+
+    provider: str = "mock"          # mock | cloudflare | local
+    model: str = ""
+    width: int = 1024
+    height: int = 1024
+    daily_limit: int = 50           # a ceiling on spend and on volume alike
+
+
+@dataclass
 class NotifyConfig:
     channels: list[str] = field(default_factory=lambda: ["console"])
     discord_webhook_url: str = ""
@@ -158,6 +174,7 @@ class Settings:
     quality: QualityConfig = field(default_factory=QualityConfig)
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
+    image: ImageConfig = field(default_factory=ImageConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     source_path: Path | None = None
 
@@ -179,6 +196,13 @@ class Settings:
             )
         for plat in self.platforms.values():
             plat.validate()
+        from .. imagegen.providers import PROVIDERS as _IMAGE_PROVIDERS  # noqa: PLC0415
+
+        if self.image.provider not in _IMAGE_PROVIDERS:
+            raise ConfigError(
+                f"image.provider は {tuple(_IMAGE_PROVIDERS)} のいずれか: "
+                f"{self.image.provider!r}"
+            )
         if not 0 < self.quality.max_similarity <= 1:
             raise ConfigError("quality.max_similarity must be in (0, 1]")
         if not 0 < self.anomaly.reach_drop_ratio < 1:
@@ -291,6 +315,7 @@ def load_settings(path: str | Path | None = None, *, load_env: bool = True) -> S
         quality=_section(raw, "quality", QualityConfig),
         policy=_section(raw, "policy", PolicyConfig),
         generation=_section(raw, "generation", GenerationConfig),
+        image=_section(raw, "image", ImageConfig),
         notify=_section(raw, "notify", NotifyConfig),
         source_path=p,
     )
