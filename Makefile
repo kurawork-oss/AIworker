@@ -1,7 +1,7 @@
 PY ?= python3
 export PYTHONPATH := src
 
-.PHONY: help init doctor test check smoke hygiene ui sync-templates generate review status report clean
+.PHONY: help init doctor serve test check smoke hygiene ui sync-templates generate review status report clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -11,6 +11,9 @@ init:  ## DBと設定を初期化
 
 doctor:  ## 設定を検証
 	$(PY) -m aiworker doctor
+
+serve:  ## 承認UIを起動 → http://127.0.0.1:8787
+	$(PY) -m aiworker serve
 
 test:  ## テストを実行
 	$(PY) -m pytest
