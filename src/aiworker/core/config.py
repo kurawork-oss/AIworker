@@ -44,12 +44,26 @@ class PlatformConfig:
     min_interval_minutes: int = 60
     jitter_minutes: int = 20
     active_hours: tuple[int, int] = (9, 22)
+    #: "required" -- every item waits for a person (the default).
+    #: "auto"     -- an item that passes EVERY guardrail is approved without
+    #:              waiting; anything a guardrail flags still goes to a human.
+    #: Pick per platform by what a mistake costs: a rejected stock asset costs
+    #: a re-upload, a bad post under your own name costs reputation or the
+    #: account. Uniform review across both is just a bottleneck on the cheap one.
+    approval: str = "required"
     require_ai_disclosure: bool = False
     disclosure_text: str = ""
     max_retries: int = 3
     retry_backoff_seconds: int = 30
 
+    APPROVAL_POLICIES = ("required", "auto")
+
     def validate(self) -> None:
+        if self.approval not in self.APPROVAL_POLICIES:
+            raise ConfigError(
+                f"[{self.name}] approval は {self.APPROVAL_POLICIES} のいずれか: "
+                f"{self.approval!r}"
+            )
         if self.daily_limit < 0 or self.weekly_limit < 0:
             raise ConfigError(f"[{self.name}] limits must be >= 0")
         if self.weekly_limit and self.daily_limit > self.weekly_limit:
@@ -158,8 +172,10 @@ class Settings:
     def validate(self) -> None:
         if self.require_human_approval is not True:
             raise ConfigError(
-                "require_human_approval must stay true: unattended publishing is "
-                "out of scope for this system by design."
+                "require_human_approval must stay true. It is the master switch: "
+                "with it on, a platform may still use approval: auto, but only "
+                "items that pass every guardrail skip the human -- anything "
+                "flagged always waits for one."
             )
         for plat in self.platforms.values():
             plat.validate()

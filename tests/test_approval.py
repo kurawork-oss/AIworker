@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from aiworker.approval import service as approval
 from aiworker.core import db
 from aiworker.core.models import Status
@@ -108,3 +110,71 @@ def test_generation_stops_when_the_queue_is_full(conn, settings):
     result = generate(conn, settings, 3)
     assert not result.items and result.skipped
     assert "queue" in result.skipped[0]
+
+
+# --------------------------------------------------------------------------
+# approval: auto -- risk-tiered review
+# --------------------------------------------------------------------------
+def test_auto_platforms_approve_clean_items_without_a_human(conn, settings):
+    settings.platforms["x"].approval = "auto"
+    generate(conn, settings, 3)
+    decisions = approval.auto_approve(conn, settings)
+    assert decisions and all(d.ok for d in decisions)
+    assert all(i.status == Status.APPROVED.value
+               for i in db.list_items(conn, status=Status.APPROVED.value))
+
+
+def test_auto_approval_still_records_who_and_why(conn, settings):
+    settings.platforms["x"].approval = "auto"
+    item = generate(conn, settings, 1).items[0]
+    approval.auto_approve(conn, settings)
+    history = db.approval_history(conn, item.id)
+    assert history[-1]["actor"] == approval.AUTO_ACTOR
+    assert "auto" in history[-1]["note"]
+
+
+def test_auto_approval_never_clears_a_blocked_item(conn, settings):
+    """`auto` moves the routine case off the queue. It must not lower the bar
+    for the risky one -- a guardrail finding still waits for a person."""
+    settings.platforms["x"].approval = "auto"
+    item = generate(conn, settings, 1).items[0]
+    approval.edit(conn, settings, item.id, actor="a", body="絶対に稼げる方法です。" * 4)
+    assert db.get_item(conn, item.id).status == Status.BLOCKED.value
+
+    approval.auto_approve(conn, settings)
+    assert db.get_item(conn, item.id).status == Status.BLOCKED.value
+
+
+def test_required_platforms_are_untouched(conn, settings):
+    settings.platforms["x"].approval = "auto"
+    settings.platforms["youtube"].approval = "required"
+    generate(conn, settings, 2, channel="shorts_script", platform="youtube")
+    approval.auto_approve(conn, settings)
+    assert all(i.status == Status.PENDING_REVIEW.value
+               for i in db.list_items(conn, platform="youtube"))
+
+
+def test_default_is_still_required(conn, settings):
+    generate(conn, settings, 2)
+    assert approval.auto_approve(conn, settings) == []
+    assert all(i.status == Status.PENDING_REVIEW.value for i in approval.queue(conn))
+
+
+def test_plan_applies_the_policy(conn, settings):
+    """A cron running generate -> plan -> publish needs no human step for an
+    auto platform."""
+    from aiworker.scheduler import planner
+
+    settings.platforms["x"].approval = "auto"
+    generate(conn, settings, 2)
+    result = planner.plan(conn, settings)
+    assert len(result.auto_approved) == 2
+    assert len(result.scheduled) == 2
+
+
+def test_an_unknown_approval_policy_is_a_config_error(settings):
+    from aiworker.core.errors import ConfigError
+
+    settings.platforms["x"].approval = "sometimes"
+    with pytest.raises(ConfigError, match="approval"):
+        settings.validate()

@@ -43,6 +43,12 @@ that way (`init` and `checklist` both failed on `pip install`).
   generation and approval cannot slip past checks that ran before the edit.
 - Overriding a block needs `force=True` **and** a written reason, recorded as
   `approve_override` at WARNING.
+- A platform may set `approval: auto`, which approves items that pass **every**
+  guardrail without waiting for a person — routed through `approve()` with
+  actor `auto`, never `force`, so the audit trail and the block behaviour are
+  unchanged. Review is tiered by what a mistake costs, not applied uniformly:
+  a rejected stock asset costs a re-upload, a bad post under the operator's own
+  name costs the account.
 - `scheduler/planner.py:_preflight` re-verifies everything immediately before
   handing an item to a publisher. Planning-time decisions are hints, never
   permission.

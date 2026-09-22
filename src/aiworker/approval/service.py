@@ -187,6 +187,41 @@ def _persist_reports(conn: sqlite3.Connection, item: ContentItem) -> None:
     )
 
 
+AUTO_ACTOR = "auto"
+
+
+def auto_approve(conn: sqlite3.Connection, settings: Settings, *, limit: int = 100,
+                 platform: str | None = None) -> list[Decision]:
+    """Approve the clean items on platforms configured `approval: auto`.
+
+    Deliberately routed through `approve()` rather than writing APPROVED
+    directly: the invariant that one function owns that transition, and that
+    every transition lands in the audit trail with an actor, is what makes the
+    gate checkable. An auto-approval is recorded as actor `auto` so it is
+    distinguishable from a person's, and a policy change later is auditable.
+
+    `force` is never passed. Anything a guardrail flagged still waits for a
+    human -- "auto" moves the routine case off the queue, it does not lower the
+    bar for the risky one.
+    """
+    auto_platforms = [
+        name for name, cfg in settings.platforms.items() if cfg.approval == "auto"
+    ]
+    if platform:
+        auto_platforms = [p for p in auto_platforms if p == platform]
+    if not auto_platforms:
+        return []
+
+    decisions: list[Decision] = []
+    for name in auto_platforms:
+        for item in db.list_items(conn, status=Status.PENDING_REVIEW.value,
+                                  platform=name, limit=limit):
+            decision = approve(conn, settings, item.id, actor=AUTO_ACTOR,
+                               note=f"approval: auto ({name})", force=False)
+            decisions.append(decision)
+    return decisions
+
+
 def stats(conn: sqlite3.Connection) -> dict[str, int]:
     counts = db.count_by_status(conn)
     return {s.value: counts.get(s.value, 0) for s in Status}

@@ -30,6 +30,13 @@ require_human_approval: true
 # platforms
 # -----------------------------------------------------------------------------
 # enabled:              false = never scheduled, never published
+# approval:             required | auto
+#   required -> 全件を人間が確認してから公開（既定）
+#   auto     -> ガードレールを全部通ったものは自動承認。
+#               ブロックされたものは従来どおり人間の判断へ。
+#   ミスのコストで選んでください。ストック素材は審査で落ちても再投稿するだけ、
+#   自分の名前で出る投稿はBANや信用の問題。両方を同じ手間で見るのは、
+#   安いほうを詰まらせるだけです。
 # publisher:            dryrun | manual | <adapter name>
 #   dryrun -> log only
 #   manual -> emit a ready-to-paste file in var/outbox/ for a human to post
@@ -85,6 +92,7 @@ platforms:
 
   adobe_stock:
     enabled: false
+    approval: auto          # 審査で落ちても再投稿するだけ。1件ずつ見る価値が薄い
     publisher: manual
     accounts: [main]
     daily_limit: 10

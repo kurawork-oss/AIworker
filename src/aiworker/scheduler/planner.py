@@ -43,6 +43,8 @@ class PlanEntry:
 @dataclass
 class PlanResult:
     entries: list[PlanEntry] = field(default_factory=list)
+    #: Items approved by policy during this run (platforms on `approval: auto`).
+    auto_approved: list = field(default_factory=list)
 
     @property
     def scheduled(self) -> list[PlanEntry]:
@@ -53,7 +55,11 @@ class PlanResult:
         return [e for e in self.entries if e.job is None]
 
     def summary(self) -> str:
-        return f"{len(self.scheduled)} scheduled, {len(self.skipped)} skipped"
+        auto = ""
+        if self.auto_approved:
+            ok = sum(1 for d in self.auto_approved if d.ok)
+            auto = f"、自動承認 {ok}件"
+        return f"{len(self.scheduled)} scheduled, {len(self.skipped)} skipped{auto}"
 
 
 @dataclass
@@ -72,9 +78,18 @@ class RunOutcome:
 # --------------------------------------------------------------------------
 def plan(conn: sqlite3.Connection, settings: Settings, *, limit: int = 20,
          platform: str | None = None, rng: random.Random | None = None,
-         horizon_days: int = 7) -> PlanResult:
+         horizon_days: int = 7, apply_auto_approval: bool = True) -> PlanResult:
     rng = rng or random.Random()
     result = PlanResult()
+
+    # Platforms on `approval: auto` clear their clean backlog here, so a cron
+    # running generate -> plan -> publish needs no human step for them. Items a
+    # guardrail flagged are untouched and still wait for one.
+    if apply_auto_approval:
+        from ..approval.service import auto_approve
+
+        for decision in auto_approve(conn, settings, platform=platform):
+            result.auto_approved.append(decision)
     items = db.list_items(conn, status=Status.APPROVED.value, platform=platform, limit=limit)
 
     for item in items:
