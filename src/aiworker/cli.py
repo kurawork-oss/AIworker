@@ -30,6 +30,7 @@ from .generators.service import GenerationService
 from .guard import anomaly, killswitch, quota
 from .notify.notifier import Alert, Notifier
 from .publishers.registry import publisher_for
+from .imagegen import service as imagegen_service
 from .metrics import importer as metrics_importer
 from .revenue import importer, report as reporting
 from .scheduler import planner
@@ -520,6 +521,35 @@ def cmd_metrics_add(args) -> int:
         ctx.close()
 
 
+def cmd_image_generate(args) -> int:
+    """Generate the image files for approved stock assets.
+
+    Runs after approval: the prompt already passed the guardrails and a person
+    (or `approval: auto`) cleared it. This turns the prompt into an actual PNG
+    in var/outbox/, so the only remaining human step is the upload Adobe Stock
+    requires be done by hand.
+    """
+    ctx = Context(args)
+    try:
+        run = imagegen_service.generate(ctx.conn, ctx.settings, limit=args.limit,
+                                        dry_run=args.dry_run)
+        print(run.summary())
+        for uid in run.generated:
+            path = imagegen_service.image_path(
+                ctx.settings, db.get_item_by_uid(ctx.conn, uid))
+            print(f"  ✓ {uid}  →  {path}")
+        for f in run.failed:
+            print(f"  ✗ {f}")
+        for sk in run.skipped:
+            print(f"  - {sk}")
+        if run.generated and not args.dry_run:
+            print(f"\n次: var/outbox/ の画像とメタデータを確認し、"
+                  f"各ストックサイトにアップロードしてください。")
+        return 0 if not run.failed or run.generated else 1
+    finally:
+        ctx.close()
+
+
 def cmd_metrics_import(args) -> int:
     ctx = Context(args)
     try:
@@ -757,6 +787,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--currency", default="JPY")
     sp.add_argument("--note", default="")
     sp.set_defaults(func=cmd_revenue_add)
+
+    sp = sub.add_parser("image", help="承認済みストック素材の画像を生成する")
+    sp.add_argument("--limit", type=int, default=20)
+    sp.add_argument("--dry-run", action="store_true", help="生成せず対象だけ表示")
+    sp.set_defaults(func=cmd_image_generate)
 
     met = sub.add_parser("metrics", help="リーチ等の実績値")
     msub = met.add_subparsers(dest="metrics_command", required=True)

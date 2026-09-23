@@ -119,6 +119,12 @@ a live database).
 - **The default LLM provider is `mock`**: offline, seeded, no API key, obviously
   placeholder text. It exists so the whole pipeline is testable without spend.
   Tests rely on it; don't replace it with a network call.
+- **Image generation is provider-abstracted** (`imagegen/`), same shape as the
+  LLM layer. Default `mock` (offline, valid PNG). Real backends are `cloudflare`
+  (Workers AI / FLUX — free, no card, no GPU) and `local` (a Stable Diffusion
+  server on localhost). Browser-driving a chat UI is deliberately absent: it
+  breaks the product's terms and risks the account. `aiworker image` runs it
+  after approval, writing PNG + JSON to var/outbox/ for a manual upload.
 - The web UI is server-rendered with no framework and no build step. The one
   script in it is the outbox copy button, because that screen's entire job is
   "copy this, paste it there".
