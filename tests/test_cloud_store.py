@@ -14,7 +14,7 @@ from aiworker.core.errors import ConfigError, TransientError
 
 URL = "https://abc.supabase.co"
 OWNER = "11111111-1111-1111-1111-111111111111"
-SECRET = "sb_secret_DO_NOT_LEAK"
+SB_KEY = "sb_secret_DO_NOT_LEAK"
 
 
 class FakeHTTP:
@@ -37,7 +37,7 @@ class FakeHTTP:
         return dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.requests[i].full_url).query))
 
 
-def store(http, key=SECRET):
+def store(http, key=SB_KEY):
     return RestStore(URL, key, OWNER, opener=http)
 
 
@@ -48,7 +48,7 @@ def http_error(code, body="nope"):
 def test_a_new_secret_key_goes_in_apikey_only():
     http = FakeHTTP([])
     store(http).accounts("b1")
-    assert http.last.get_header("Apikey") == SECRET
+    assert http.last.get_header("Apikey") == SB_KEY
     assert http.last.get_header("Authorization") is None
 
 
@@ -60,7 +60,7 @@ def test_a_legacy_jwt_key_also_goes_in_authorization():
 
 def test_missing_configuration_is_a_config_error():
     with pytest.raises(ConfigError):
-        RestStore("", SECRET, OWNER)
+        RestStore("", SB_KEY, OWNER)
 
 
 def test_every_read_is_scoped_to_the_owner():
@@ -117,4 +117,4 @@ def test_busy_is_transient_and_refused_is_not():
 def test_errors_never_carry_the_key():
     with pytest.raises(StoreError) as caught:
         store(FakeHTTP(http_error(401, "Invalid API key"))).accounts("b1")
-    assert SECRET not in str(caught.value)
+    assert SB_KEY not in str(caught.value)

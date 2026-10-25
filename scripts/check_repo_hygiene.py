@@ -114,7 +114,9 @@ def check_secrets(files: list[str]) -> list[str]:
             for name, pattern in SECRET_PATTERNS:
                 if pattern.search(line):
                     problems.append(f"{path}:{lineno}: {name} らしき文字列")
-            m = ASSIGNED_SECRET.search(line)
+            # Minified third-party code is full of `token:e` and the like; the
+            # credential *shapes* above still run on it, the name heuristic not.
+            m = None if "vendor" in full.parts else ASSIGNED_SECRET.search(line)
             if m and not PLACEHOLDER.match(m.group(2)):
                 # This file documents the *names*; empty assignments are the point.
                 problems.append(
