@@ -38,7 +38,9 @@ def dbname():
     url = _with_db(PG_URL, name)
     with psycopg.connect(url, autocommit=True) as c:
         c.execute((ROOT / "supabase/tests/local_supabase_stub.sql").read_text())
-        for f in sorted((ROOT / "supabase/migrations").glob("*_core.sql")):
+        for f in sorted((ROOT / "supabase/migrations").glob("*.sql")):
+            if "storage" in f.name:  # needs Supabase's storage schema
+                continue
             c.execute(f.read_text())
         c.execute("insert into auth.users(id) values (%s), (%s)", (OWNER, STRANGER))
         c.execute("insert into public.owners(user_id) values (%s)", (OWNER,))
@@ -95,7 +97,7 @@ def world(dbname):
     with admin(dbname) as c:
         c.execute("truncate public.items, public.approvals, public.jobs, public.events, "
                   "public.controls, public.accounts, public.businesses, "
-                  "public.settings_versions cascade")
+                  "public.settings_versions, public.affiliate_programs cascade")
         biz = c.execute(
             "insert into public.businesses(owner_id, code, name) values (%s,'stock','画像販売') "
             "returning id", (OWNER,)).fetchone()[0]
@@ -494,3 +496,58 @@ def test_approving_an_item_with_a_finished_file_puts_it_on_the_upload_list(world
     row = item(world, i)
     assert row["status"] == "awaiting_manual"
     assert row["approved_version"] == row["version"]
+
+
+# --------------------------------------------------------------------------
+# text items and the A8 program registry
+# --------------------------------------------------------------------------
+def test_an_approved_note_article_goes_straight_to_the_posting_list(world):
+    """No file to wait for: a manual text item is ready to post on approval."""
+    with admin(world["url"]) as c:
+        i = c.execute(
+            "insert into public.items(owner_id, business_id, account_id, kind, title, body, status) "
+            "values (%s,%s,%s,'note_article','t','b','pending_review') returning id",
+            (OWNER, world["biz"], world["manual"])).fetchone()[0]
+    with As(world["url"], "authenticated", OWNER) as s:
+        s.q("select public.approve_item(%s, 1, '', false)", (i,))
+        s.q("select public.mark_manual_done(%s, 'https://note.com/x/n/abc')", (i,))
+    row = item(world, i)
+    assert row["status"] == "published"
+    assert row["published_at"] is not None
+    assert row["external_url"] == "https://note.com/x/n/abc"
+
+
+def program_sql():
+    return ("insert into public.affiliate_programs(owner_id, name, link_url, facts) "
+            "values (%s, %s, %s, %s) returning id")
+
+
+def test_the_owner_registers_and_reads_programs(world):
+    with As(world["url"], "authenticated", OWNER) as s:
+        s.q(program_sql(), (OWNER, "テスト案件", "https://px.a8.net/svt/ejp?a8mat=X", "無料体験あり"))
+        assert s.one("select count(*) from public.affiliate_programs")[0] == 1
+
+
+def test_a_stranger_cannot_add_programs_to_the_owner(world):
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with As(world["url"], "authenticated", STRANGER) as s:
+            s.q(program_sql(), (OWNER, "x", "https://px.a8.net/svt/ejp?a8mat=X", ""))
+
+
+def test_the_pipeline_reads_programs_but_cannot_change_them(world):
+    with As(world["url"], "authenticated", OWNER) as s:
+        s.q(program_sql(), (OWNER, "案件", "https://px.a8.net/svt/ejp?a8mat=X", ""))
+    with As(world["url"], "service_role") as s:
+        assert s.one("select count(*) from public.affiliate_programs")[0] == 1
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with As(world["url"], "service_role") as s:
+            s.q("update public.affiliate_programs set link_url='https://evil.example/'")
+
+
+def test_a_program_link_must_be_a_plain_https_url(world):
+    """No javascript:, no markup smuggled into the link that articles embed."""
+    for bad in ("javascript:alert(1)", 'https://px.a8.net/x" onclick="steal()'):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with As(world["url"], "authenticated", OWNER) as s:
+                s.q(program_sql(), (OWNER, "x", bad, ""))
+

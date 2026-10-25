@@ -10,36 +10,19 @@ One run, start to finish, with nobody's computer switched on:
       -> blocked | 確認待ち | auto-approved via approve_item()
                                    -> アップロード待ち (the owner's to-do list)
 
-Rules this module keeps (the database keeps the rest, whatever this code does):
-
-* It never writes ``approved``. Auto-approval is a call to the same
-  ``approve_item`` the phone uses, which refuses unless the owner set the
-  account to auto, the item is clean, and it is not a sample.
-* A person's revision request always comes back to that person, never
-  auto-approved.
-* Volume is bounded three ways: the account's daily limit (the owner's
-  publication budget), a daily generation cap (the free tiers' budget) and
-  a backlog cap (no point making more than the owner can upload).
-* Logs carry counts, not content: on a public repository, Actions logs are
-  public.
+The rules shared by every business (stops, volume, approval) are in base.py.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import random
-from collections import Counter
-from dataclasses import dataclass, field
 from typing import Any
-from zoneinfo import ZoneInfo
 
-from ..core.config import PolicyConfig
-from ..core.errors import ConfigError, TransientError
-from ..core.models import ContentItem
-from ..generators.diversity import Variant, choose_variants
+from ..core.errors import TransientError
+from ..generators.diversity import Variant
 from ..generators.llm import LLMProvider, LLMRequest
 from ..generators.prompts import spec_for
-from ..guard import policy as policy_guard
 from ..imagegen.postprocess import (
     PostprocessError,
     inspect,
@@ -47,9 +30,9 @@ from ..imagegen.postprocess import (
     upscale_for_stock,
 )
 from ..imagegen.providers import ImageProvider, ImageRequest
-from .store import Row, Store, StoreError
+from .base import TZ, BusinessPipeline, RunReport, iso  # noqa: F401  (re-exported)
+from .store import Row, Store
 
-TZ = ZoneInfo("Asia/Tokyo")
 BUSINESS_CODE = "stock_images"
 KIND = "stock_image"
 PREVIEWS, FINALS = "previews", "finals"
@@ -69,17 +52,13 @@ DEFAULT_THEMES = [
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "themes": DEFAULT_THEMES,
-    "angles": [],            # empty: the generator's defaults
-    "tones": [],
     "per_run": 2,            # new candidates per scheduled run
     "daily_generation_cap": 10,
     "max_backlog": 30,       # 確認待ち + アップロード待ち
     "max_image_attempts": 3,
     "retries_per_run": 3,
-    "revisions_per_run": 3,
     "image_width": 1024,
     "image_height": 1024,
-    "banned_terms": [],
 }
 
 REQUIRED_NEGATIVES = ("text", "watermark", "logo", "brand", "real person")
@@ -90,34 +69,6 @@ MAX_TITLE = 70
 CLEANUP_STATUSES = ("published", "rejected", "cancelled", "failed")
 
 
-@dataclass
-class RunReport:
-    stopped: str = ""
-    created: int = 0
-    blocked: int = 0
-    to_review: int = 0
-    auto_approved: int = 0
-    revised: int = 0
-    retried: int = 0
-    failed: int = 0
-    cleaned: int = 0
-    errors: list[str] = field(default_factory=list)
-
-    def as_dict(self) -> dict[str, Any]:
-        return {"stopped": self.stopped, "created": self.created, "blocked": self.blocked,
-                "to_review": self.to_review, "auto_approved": self.auto_approved,
-                "revised": self.revised, "retried": self.retried, "failed": self.failed,
-                "cleaned": self.cleaned, "errors": len(self.errors)}
-
-    def summary(self) -> str:
-        if self.stopped:
-            return f"停止: {self.stopped}"
-        return (f"新規 {self.created} / 確認待ち {self.to_review} / "
-                f"自動承認 {self.auto_approved} / ブロック {self.blocked} / "
-                f"修正 {self.revised} / 再試行 {self.retried} / 失敗 {self.failed} / "
-                f"整理 {self.cleaned} / エラー {len(self.errors)}")
-
-
 def _category(value: Any) -> int | None:
     try:
         n = int(value)
@@ -126,117 +77,39 @@ def _category(value: Any) -> int | None:
     return n if 1 <= n <= 21 else None
 
 
-def _iso(d: dt.datetime) -> str:
-    return d.astimezone(dt.UTC).isoformat()
+class StockPipeline(BusinessPipeline):
+    """The account starts on approval *auto*: every finished image is looked
+    at by the owner anyway when they upload it by hand (Adobe forbids
+    automated submission), so a second review step would be the same look
+    twice. Anything a check flags still waits for a person."""
 
+    CODE = BUSINESS_CODE
+    NAME = "AI画像販売"
+    KIND = KIND
+    PLATFORM = "adobe_stock"
+    ACCOUNT_DEFAULTS = {
+        "approval_policy": "auto", "publish_method": "manual", "terms_status": "conditional",
+        "terms_source_url": "https://helpx.adobe.com/stock/contributor/help/generative-ai-content.html",
+    }
+    DEFAULTS = DEFAULT_SETTINGS
 
-class StockPipeline:
     def __init__(self, store: Store, llm: LLMProvider, images: ImageProvider, *,
                  rng: random.Random | None = None, now: dt.datetime | None = None,
                  worker_id: str = "github-actions"):
-        self.store = store
-        self.llm = llm
+        super().__init__(store, llm, rng=rng, now=now, worker_id=worker_id)
         self.images = images
-        self.rng = rng or random.Random()
-        self.now = now or dt.datetime.now(TZ)
-        self.worker_id = worker_id
-        # Anything made with a stand-in generator is test output, end to end.
-        self.sample = bool(getattr(images, "is_sample", False)) or llm.name == "mock"
         self.spec = spec_for("stock_asset")
 
-    # -- setup -------------------------------------------------------------
-    def ensure_setup(self) -> tuple[Row, Row]:
-        """The business and its Adobe Stock account, created on first run.
+    @property
+    def sample(self) -> bool:
+        return super().sample or bool(getattr(self.images, "is_sample", False))
 
-        The account starts on approval *auto*: every finished image is looked
-        at by the owner anyway when they upload it by hand (Adobe forbids
-        automated submission), so a second review step would be the same look
-        twice. Anything a check flags still waits for a person.
-        """
-        biz = self.store.business(BUSINESS_CODE)
-        if biz is None:
-            biz = self.store.create_business({
-                "code": BUSINESS_CODE, "name": "AI画像販売", "stage": "verifying",
-                "settings": {}})
-        accounts = [a for a in self.store.accounts(biz["id"]) if a["platform"] == "adobe_stock"]
-        acc = accounts[0] if accounts else self.store.create_account({
-            "business_id": biz["id"], "platform": "adobe_stock",
-            "approval_policy": "auto", "publish_method": "manual",
-            "terms_status": "conditional",
-            "terms_source_url": "https://helpx.adobe.com/stock/contributor/help/generative-ai-content.html",
-        })
-        return biz, acc
-
-    def settings(self, biz: Row) -> dict[str, Any]:
-        merged = dict(DEFAULT_SETTINGS)
-        merged.update({k: v for k, v in (biz.get("settings") or {}).items() if v not in (None, "")})
-        return merged
-
-    # -- the run -----------------------------------------------------------
-    def run(self) -> RunReport:
-        report = RunReport()
-        if self.store.controls().get("global_stop"):
-            report.stopped = "全体停止中"
-            return report
-        self.store.heartbeat(self.worker_id, {"llm": self.llm.name, "image": self.images.name})
-        biz, acc = self.ensure_setup()
-        if biz.get("stage") == "stopped":
-            report.stopped = "事業が停止中"
-            return report
-        if acc.get("status") != "active":
-            report.stopped = "アカウントが停止中"
-            return report
-        # 要件 受入条件7: terms nobody has checked (or that forbid this use)
-        # stop the work, rather than producing things that cannot be used.
-        if acc.get("terms_status") in ("unverified", "forbidden"):
-            report.stopped = "規約が未確認または不可のアカウント"
-            return report
-        cfg = self.settings(biz)
-
-        try:
-            self._cleanup(biz, report)
-            self._retry(biz, acc, cfg, report)
-            self._revise(biz, acc, cfg, report)
-            for variant in self._plan(biz, acc, cfg):
-                self._create(biz, acc, cfg, variant, report)
-        except ConfigError as exc:
-            # A missing or wrong key will not fix itself on the next item.
-            report.errors.append(f"設定エラー: {exc}")
-
-        level = "error" if report.errors else "info"
-        self.store.log(level, "pipeline", f"{biz['name']}: {report.summary()}",
-                       {**report.as_dict(), "sample": self.sample,
-                        "first_error": report.errors[0][:300] if report.errors else ""})
-        return report
-
-    # -- how many ----------------------------------------------------------
-    def _plan(self, biz: Row, acc: Row, cfg: dict[str, Any]) -> list[Variant]:
-        midnight = self.now.astimezone(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
-        today = self.store.items(biz["id"], created_since=_iso(midnight), limit=1000)
-        made_today = len(today)
-        usable_today = sum(1 for i in today
-                           if i["status"] not in ("blocked", "failed", "cancelled", "rejected"))
-        backlog = len(self.store.items(
-            biz["id"], statuses=("pending_review", "awaiting_manual", "needs_revision"), limit=1000))
-        room = min(int(cfg["per_run"]),
-                   int(acc.get("daily_limit", 1)) - usable_today,
-                   int(cfg["daily_generation_cap"]) - made_today,
-                   int(cfg["max_backlog"]) - backlog)
-        if room <= 0:
-            return []
-
-        recent = self.store.items(biz["id"], limit=60)
-        combos: Counter[str] = Counter()
-        themes: Counter[str] = Counter()
-        angles: Counter[str] = Counter()
-        for i in recent:
-            m = i.get("meta") or {}
-            combos[f"{m.get('theme')}|{m.get('angle')}|{m.get('tone')}"] += 1
-            themes[m.get("theme", "")] += 1
-            angles[m.get("angle", "")] += 1
-        return choose_variants(room, used_combo=combos, used_theme=themes, used_angle=angles,
-                               themes=list(cfg["themes"]), angles=list(cfg["angles"]) or None,
-                               tones=list(cfg["tones"]) or None, rng=self.rng)
+    def work(self, biz: Row, acc: Row, cfg: dict[str, Any], report: RunReport) -> None:
+        self._cleanup(biz, report)
+        self._retry(biz, acc, cfg, report)
+        self._revise(biz, acc, cfg, report)
+        for variant in self.plan(biz, cfg, self.room(biz, acc, cfg)):
+            self._create(biz, acc, cfg, variant, report)
 
     # -- writing the brief -------------------------------------------------
     def _brief(self, variant: Variant, extra: str = "") -> tuple[str, str, dict[str, Any]]:
@@ -276,12 +149,6 @@ class StockPipeline:
         body = str(raw.get("body") or "").strip()
         return title, body, meta
 
-    def _screen(self, title: str, body: str, meta: dict[str, Any],
-                cfg: dict[str, Any]) -> policy_guard.PolicyReport:
-        probe = ContentItem(channel="stock_asset", platform="adobe_stock",
-                            title=title, body=body, meta=meta)
-        return policy_guard.check(probe, PolicyConfig(banned_terms=list(cfg["banned_terms"])))
-
     # -- new items ---------------------------------------------------------
     def _create(self, biz: Row, acc: Row, cfg: dict[str, Any], variant: Variant,
                 report: RunReport) -> None:
@@ -290,7 +157,7 @@ class StockPipeline:
         except (TransientError, ValueError) as exc:
             report.errors.append(f"文章生成: {exc}")
             return
-        pol = self._screen(title, body, meta, cfg)
+        pol = self.screen(title, body, meta, cfg, "stock_asset")
         row = {"business_id": biz["id"], "account_id": acc["id"], "kind": KIND,
                "title": title, "body": body, "meta": meta, "is_sample": self.sample,
                "policy_report": pol.as_dict()}
@@ -311,23 +178,18 @@ class StockPipeline:
             self._render(item, biz, acc, cfg, report)
 
     def _revise(self, biz: Row, acc: Row, cfg: dict[str, Any], report: RunReport) -> None:
-        asked = self.store.items(biz["id"], statuses=("needs_revision",),
-                                 limit=int(cfg["revisions_per_run"]))
-        for item in reversed(asked):
-            if item.get("kind") != KIND:
-                continue
+        for item in self.revision_requests(biz, cfg):
             old = item.get("meta") or {}
             variant = Variant(old.get("theme", ""), old.get("angle", ""), old.get("tone", ""))
-            extra = ("\n\n前回の生成プロンプト:\n" + str(old.get("prompt", "")) +
-                     "\n\n依頼者からの修正指示（最優先で反映）:\n" + item.get("revision_note", ""))
             try:
-                title, body, meta = self._brief(variant, extra)
+                title, body, meta = self._brief(
+                    variant, self.revision_extra(item, str(old.get("prompt", ""))))
             except (TransientError, ValueError) as exc:
                 report.errors.append(f"修正の文章生成: {exc}")
                 continue
             meta["revisions"] = int(old.get("revisions", 0)) + 1
             meta["revision_note"] = item.get("revision_note", "")
-            pol = self._screen(title, body, meta, cfg)
+            pol = self.screen(title, body, meta, cfg, "stock_asset")
             draft = self.store.update_item(
                 item["id"], {"title": title, "body": body, "meta": meta, "status": "draft",
                              "policy_report": pol.as_dict(), "blocking": pol.blocking,
@@ -390,17 +252,7 @@ class StockPipeline:
                                    expect_status="checking")
             report.blocked += 1
             return
-        wants_person = (acc.get("approval_policy") != "auto" or self.sample
-                        or int(meta.get("revisions", 0)) > 0)
-        if not wants_person:
-            try:
-                self.store.approve(item["id"], checked["version"], "自動チェック通過")
-                report.auto_approved += 1
-                return
-            except StoreError as exc:
-                report.errors.append(f"自動承認できず確認待ちへ: {exc}")
-        self.store.update_item(item["id"], {"status": "pending_review"}, expect_status="checking")
-        report.to_review += 1
+        self.verdict(checked, acc, report)
 
     def _image_failed(self, item: Row, meta: dict[str, Any], cfg: dict[str, Any], why: str,
                       report: RunReport, *, permanent: bool = False) -> None:

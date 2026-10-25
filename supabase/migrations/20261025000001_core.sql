@@ -171,6 +171,7 @@ create table if not exists public.items (
   approval_expires_at timestamptz,
   -- 本人操作の完了は承認とは別 (F03, F04): evidence is required.
   manual_done_at      timestamptz,
+  published_at        timestamptz,
   manual_evidence     text not null default '',
   external_id         text not null default '',
   external_url        text not null default '',
@@ -520,7 +521,9 @@ begin
   -- it straight onto their to-do list, rather than leaving it "approved"
   -- until the next scheduled run notices.
   -- A sample stays merely "approved": it must never show up as an upload task.
-  if it.final_path <> '' and not it.is_sample
+  -- Text items are complete at approval; media items once their file exists.
+  if (it.final_path <> '' or it.kind in ('note_article', 'affiliate_article'))
+     and not it.is_sample
      and coalesce(acc.publish_method, 'manual') = 'manual' then
     update public.items set status = 'awaiting_manual' where id = p_item
     returning * into it;
@@ -597,7 +600,8 @@ begin
       using errcode = 'check_violation';
   end if;
   update public.items
-     set status = 'published', manual_done_at = now(), manual_evidence = p_evidence,
+     set status = 'published', manual_done_at = now(), published_at = now(),
+         manual_evidence = p_evidence,
          external_url = case when p_evidence ~* '^https?://' then p_evidence else external_url end
    where id = p_item
   returning * into it;

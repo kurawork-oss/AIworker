@@ -129,7 +129,7 @@ class MockProvider:
         closer = rng.choice(_CLOSERS)
         title = f"{theme}:{angle}({tone})"
 
-        if channel == "note_article":
+        if channel in ("note_article", "affiliate_article"):
             sections = [
                 f"## {i+1}. {s}"
                 for i, s in enumerate(
@@ -144,8 +144,11 @@ class MockProvider:
                 f"{s}\n\n{rng.choice(_BODIES)}\n\n{rng.choice(_BODIES)}\n\n{rng.choice(_CLOSERS)}"
                 for s in sections
             )
+            if channel == "affiliate_article":
+                long_body = long_body.replace(sections[2], sections[2] + "\n\n{{LINK}}", 1)
             return {
                 "title": f"{theme}を{angle}から立て直す実践ノート",
+                "categories": ["副業", "AI活用"],
                 "headline": hook,
                 "outline": [s.lstrip("# ") for s in sections],
                 "body": f"{hook}\n\n{long_body}\n\n{closer}\n\n（この記事はAI支援で作成し、公開前に人間が確認しています）",

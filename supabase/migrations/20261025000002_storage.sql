@@ -7,14 +7,15 @@
 --
 -- Layout: <owner uuid>/<item uuid>/<file>
 --   previews -- ~1MP, what you look at on the phone before approving
---   finals   -- the >=4MP file to upload to the stock site (JPEG)
+--   finals   -- the file to publish: the >=4MP stock JPEG, or a Shorts MP4
+--               (50 MB is the free plan's per-file ceiling)
 -- Only the pipeline (service role) writes; the owner reads their own folder.
 -- =============================================================================
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values
   ('previews', 'previews', false, 5 * 1024 * 1024,  array['image/png','image/jpeg','image/webp']),
-  ('finals',   'finals',   false, 20 * 1024 * 1024, array['image/jpeg','image/png'])
+  ('finals',   'finals',   false, 50 * 1024 * 1024, array['image/jpeg','image/png','video/mp4'])
 on conflict (id) do update
   set public = false,
       file_size_limit = excluded.file_size_limit,

@@ -1,6 +1,6 @@
 name: pipeline
 
-# ⑤ AI画像販売, on a schedule, with nobody's computer switched on.
+# 画像販売・note・A8 on a schedule, with nobody's computer switched on.
 #
 # Off until the owner switches it on: set the repository variable
 # AIWORKER_PIPELINE to "on" once the secrets below are stored. Until then a
@@ -50,4 +50,9 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # A8 -> はてなブログ. Optional: without them the app shows 未接続.
+          HATENA_ID: ${{ vars.HATENA_ID }}
+          HATENA_BLOG_ID: ${{ vars.HATENA_BLOG_ID }}
+          HATENA_API_KEY: ${{ secrets.HATENA_API_KEY }}
+          AIWORKER_BUSINESSES: ${{ vars.AIWORKER_BUSINESSES || 'stock_images,note_articles,affiliate' }}
         run: python -m aiworker.cloud run

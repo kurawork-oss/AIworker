@@ -46,7 +46,9 @@ class Store(Protocol):
     def accounts(self, business_id: str) -> list[Row]: ...
     def create_account(self, row: Row) -> Row: ...
     def items(self, business_id: str, *, statuses: Iterable[str] = (),
-              created_since: str = "", limit: int = 200) -> list[Row]: ...
+              created_since: str = "", published_since: str = "",
+              limit: int = 200) -> list[Row]: ...
+    def programs(self) -> list[Row]: ...
     def insert_item(self, row: Row) -> Row: ...
     def update_item(self, item_id: str, changes: Row, *,
                     expect_status: str = "") -> Row | None: ...
@@ -140,7 +142,8 @@ class RestStore:
                           self._mine(business_id=f"eq.{business_id}", select="*", order="created_at"))
 
     def items(self, business_id: str, *, statuses: Iterable[str] = (),
-              created_since: str = "", limit: int = 200) -> list[Row]:
+              created_since: str = "", published_since: str = "",
+              limit: int = 200) -> list[Row]:
         q = self._mine(business_id=f"eq.{business_id}", select="*",
                        order="created_at.desc", limit=str(limit))
         statuses = list(statuses)
@@ -148,7 +151,13 @@ class RestStore:
             q["status"] = f"in.({','.join(statuses)})"
         if created_since:
             q["created_at"] = f"gte.{created_since}"
+        if published_since:
+            q["published_at"] = f"gte.{published_since}"
         return self._rest("GET", "items", q)
+
+    def programs(self) -> list[Row]:
+        return self._rest("GET", "affiliate_programs",
+                          self._mine(status="eq.active", select="*", order="created_at"))
 
     # -- writes ------------------------------------------------------------
     def _insert(self, table: str, row: Row) -> Row:
@@ -202,6 +211,8 @@ class RestStore:
 # In memory
 # --------------------------------------------------------------------------
 _CONTENT = ("title", "body", "meta", "preview_path")
+# Ready to post the moment they are approved (mirrors approve_item()).
+TEXT_KINDS = ("note_article", "affiliate_article")
 
 
 class MemoryStore:
@@ -216,6 +227,7 @@ class MemoryStore:
         self.files: dict[tuple[str, str], tuple[bytes, str]] = {}
         self.events: list[Row] = []
         self.workers: dict[str, Row] = {}
+        self.programs_: list[Row] = []
         self._seq = 0
 
     def _stamp(self) -> str:
@@ -248,13 +260,18 @@ class MemoryStore:
         return copy.deepcopy(a)
 
     def items(self, business_id: str, *, statuses: Iterable[str] = (),
-              created_since: str = "", limit: int = 200) -> list[Row]:
+              created_since: str = "", published_since: str = "",
+              limit: int = 200) -> list[Row]:
         wanted = set(statuses)
         rows = [i for i in self.items_.values() if i["business_id"] == business_id
                 and (not wanted or i["status"] in wanted)
-                and (not created_since or i["created_at"] >= created_since)]
+                and (not created_since or i["created_at"] >= created_since)
+                and (not published_since or (i.get("published_at") or "") >= published_since)]
         rows.sort(key=lambda i: i["created_at"], reverse=True)
         return [copy.deepcopy(i) for i in rows[:limit]]
+
+    def programs(self) -> list[Row]:
+        return [copy.deepcopy(p) for p in self.programs_ if p.get("status", "active") == "active"]
 
     def insert_item(self, row: Row) -> Row:
         if row.get("status", "draft") not in (
@@ -264,7 +281,8 @@ class MemoryStore:
               "status": "draft", "title": "", "body": "", "meta": {}, "blocking": False,
               "policy_report": {}, "quality_report": {}, "revision_note": "",
               "preview_path": "", "final_path": "", "is_sample": False,
-              "approved_version": None, "created_at": self._stamp(),
+              "approved_version": None, "published_at": None, "external_url": "",
+              "external_id": "", "created_at": self._stamp(),
               **copy.deepcopy(row)}
         self.items_[it["id"]] = it
         return copy.deepcopy(it)
@@ -290,7 +308,8 @@ class MemoryStore:
         if it["version"] != version:
             raise StoreError("item changed since it was checked")
         it.update(status="approved", approved_version=version)
-        if it["final_path"] and acc["publish_method"] == "manual":
+        if ((it["final_path"] or it["kind"] in TEXT_KINDS)
+                and acc["publish_method"] == "manual"):
             it["status"] = "awaiting_manual"
         return copy.deepcopy(it)
 
