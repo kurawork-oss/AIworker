@@ -8,6 +8,8 @@ Three providers, one interface:
 * ``claude_cli`` - shells out to the ``claude`` binary (Claude Code). Best fit
                    when this system runs on a machine that already has it.
 * ``anthropic``  - direct Messages API call over ``urllib`` (no SDK needed).
+* ``gemini``     - Google Gemini REST API. Free tier, no card -- the default
+                   choice for unattended text generation at zero cost.
 
 Every provider returns **parsed JSON**, because free-form prose is impossible to
 guard mechanically: the guardrails need discrete fields (title, body, keywords)
@@ -275,6 +277,133 @@ class AnthropicProvider:
         return extract_json(text)
 
 
+# --------------------------------------------------------------------------
+# Google Gemini (free tier)
+# --------------------------------------------------------------------------
+class GeminiProvider:
+    """Gemini via the Generative Language REST API.
+
+    Chosen for text because its free tier needs no card (Claude's API has no
+    free tier). Two operational facts shape this class:
+
+    * **Model IDs churn.** In 2026 the 2.5 models were restricted to existing
+      users, previews were shut down on short notice, and the recommended IDs
+      moved twice. Hard-coding one ID means the pipeline stops the day it is
+      retired. With `model` left empty, the provider lists the models this key
+      can actually call and picks the first match from PREFERENCE, falling back
+      to any stable text Flash model.
+    * **Free-tier prompts may be used by Google to improve its products.** Send
+      content ideas, never customer or company information. (要件 N02)
+    """
+
+    name = "gemini"
+    BASE = "https://generativelanguage.googleapis.com/v1beta"
+    #: Most preferred first. Edit freely; the resolver only needs one to exist.
+    PREFERENCE = (
+        "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite", "gemini-3-flash",
+    )
+    _EXCLUDE = ("preview", "exp", "image", "tts", "audio", "live", "embedding", "thinking")
+
+    def __init__(self, model: str = "", timeout: int = 120, api_key: str | None = None,
+                 opener=None):
+        self.api_key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "")
+        if not self.api_key:
+            raise ConfigError(
+                "generation.provider が 'gemini' ですが GEMINI_API_KEY が未設定です"
+                "（Google AI Studio で無料発行し、.env か GitHub Secrets に置いてください）"
+            )
+        self.model = model.removeprefix("models/") if model else ""
+        self.timeout = timeout
+        self._open = opener or urllib.request.urlopen
+
+    # -- model resolution ----------------------------------------------------
+    def _call(self, url: str, payload: dict | None = None) -> dict:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8") if payload is not None else None,
+            headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
+            method="POST" if payload is not None else "GET",
+        )
+        try:
+            with self._open(req, timeout=self.timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", "replace")[:300]
+            if exc.code in (408, 429) or exc.code >= 500:
+                raise TransientError(f"Gemini {exc.code}: {body}") from exc
+            raise ConfigError(f"Gemini {exc.code}: {body}") from exc
+        except urllib.error.URLError as exc:
+            raise TransientError(f"Gemini に到達できません: {exc}") from exc
+
+    def available_models(self) -> list[str]:
+        data = self._call(f"{self.BASE}/models?pageSize=200")
+        names = []
+        for m in data.get("models", []):
+            if "generateContent" not in m.get("supportedGenerationMethods", []):
+                continue
+            names.append(str(m.get("name", "")).removeprefix("models/"))
+        return names
+
+    def resolve_model(self) -> str:
+        if self.model:
+            return self.model
+        names = self.available_models()
+        for preferred in self.PREFERENCE:
+            if preferred in names:
+                self.model = preferred
+                return preferred
+        def version_key(name: str) -> tuple:
+            # Compare "3.10" > "3.9" numerically; a plain string sort gets it backwards.
+            return tuple(int(x) for x in re.findall(r"\d+", name))
+
+        stable_flash = sorted(
+            (n for n in names if "flash" in n and not any(x in n for x in self._EXCLUDE)),
+            key=version_key, reverse=True,  # newest first
+        )
+        if not stable_flash:
+            raise ConfigError(
+                "このAPIキーで使える安定版のGemini Flashモデルが見つかりません。"
+                f" 利用可能: {names[:10]}"
+            )
+        self.model = stable_flash[0]
+        log.warning("preferred Gemini models unavailable; using %s", self.model)
+        return self.model
+
+    # -- generation ----------------------------------------------------------
+    def complete(self, request: LLMRequest) -> dict[str, Any]:
+        model = self.resolve_model()
+        payload: dict[str, Any] = {
+            "contents": [{"role": "user", "parts": [{"text": _with_schema(request)}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "temperature": request.temperature,
+                "maxOutputTokens": request.max_tokens,
+            },
+        }
+        if request.system:
+            payload["systemInstruction"] = {"parts": [{"text": request.system}]}
+        if request.seed is not None:
+            payload["generationConfig"]["seed"] = request.seed % (2**31)
+
+        data = self._call(f"{self.BASE}/models/{model}:generateContent", payload)
+
+        blocked = (data.get("promptFeedback") or {}).get("blockReason")
+        if blocked:
+            raise ValueError(f"Gemini がプロンプトを拒否しました: {blocked}")
+        candidates = data.get("candidates") or []
+        if not candidates:
+            raise ValueError("Gemini の応答に候補がありません")
+        first = candidates[0]
+        if first.get("finishReason") in ("SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST"):
+            raise ValueError(f"Gemini が出力を止めました: {first.get('finishReason')}")
+        text = "".join(part.get("text", "") for part in
+                       (first.get("content") or {}).get("parts", []))
+        if not text.strip():
+            raise ValueError("Gemini の応答が空です")
+        return extract_json(text)
+
+
 def _with_schema(request: LLMRequest) -> str:
     if not request.schema:
         return request.prompt
@@ -293,4 +422,10 @@ def build_provider(name: str, model: str = "", timeout: int = 120) -> LLMProvide
         return ClaudeCLIProvider(model=model, timeout=timeout)
     if name == "anthropic":
         return AnthropicProvider(model=model or "claude-opus-5", timeout=timeout)
-    raise ConfigError(f"unknown generation.provider '{name}' (mock|claude_cli|anthropic)")
+    if name == "gemini":
+        # An Anthropic model name in config means nothing to Gemini; treat it
+        # as "auto-select" rather than sending a request that will 404.
+        return GeminiProvider(model="" if model.startswith("claude") else model,
+                              timeout=timeout)
+    raise ConfigError(
+        f"unknown generation.provider '{name}' (mock|gemini|claude_cli|anthropic)")
