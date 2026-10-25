@@ -29,7 +29,7 @@
    （メールのサインイン自体は ON のまま）
 4. 「Authentication」→「Users」→「Add user」→「Create new user」
    - Email: 私のメールアドレス（私に確認してください）
-   - Password: **私が入力します**（ここで止まる）
+   - パスワード欄は **私が入力します**（ここで止まる）
    - 「Auto Confirm User」を ON
 5. SQL Editor で次を実行（`私のメール` は手順4のアドレスに置き換え）:
    ```sql
