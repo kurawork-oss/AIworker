@@ -10,6 +10,7 @@ Configuration comes from the environment (GitHub Secrets in production):
     GEMINI_API_KEY                       (AIWORKER_LLM=gemini, the default)
     CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN  (画像販売; AIWORKER_IMAGE=cloudflare)
     HATENA_ID, HATENA_BLOG_ID, HATENA_API_KEY    (A8 -> はてなブログ; optional: 未接続 until set)
+    VOICEVOX_URL, VOICEVOX_SPEAKER               (youtube_shorts; its own workflow, shorts.yml)
 
 Output is one line of counts per business. Actions logs are public on a
 public repository, so no titles, prompts, URLs or keys are ever printed.
@@ -29,7 +30,9 @@ from ..imagegen.providers import build_provider as build_images
 from .articles import AffiliatePipeline, NotePipeline
 from .base import BusinessPipeline
 from .pipeline import PREVIEWS, StockPipeline
+from .shorts import ShortsPipeline
 from .store import MemoryStore, RestStore
+from .tts import ToneTTS, VoicevoxTTS
 
 DEFAULT_BUSINESSES = "stock_images,note_articles,affiliate"
 
@@ -44,6 +47,11 @@ def _pipeline(code: str, store: RestStore, llm: LLMProvider) -> BusinessPipeline
         return NotePipeline(store, llm)
     if code == "affiliate":
         return AffiliatePipeline(store, llm)
+    if code == "youtube_shorts":
+        images = build_images(os.environ.get("AIWORKER_IMAGE", "cloudflare"),
+                              os.environ.get("AIWORKER_IMAGE_MODEL", ""))
+        tts = ToneTTS() if os.environ.get("AIWORKER_TTS") == "tone" else VoicevoxTTS.from_env()
+        return ShortsPipeline(store, llm, images, tts)
     raise ConfigError(f"unknown business '{code}'")
 
 

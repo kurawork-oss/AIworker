@@ -35,6 +35,8 @@ from .store import Row, Store, StoreError
 
 TZ = ZoneInfo("Asia/Tokyo")
 UNUSABLE = ("blocked", "failed", "cancelled", "rejected")
+FINALS = "finals"
+CLEANUP_STATUSES = ("published", "rejected", "cancelled", "failed")
 
 
 @dataclass
@@ -220,3 +222,19 @@ class BusinessPipeline:
     def revision_extra(self, item: Row, previous: str) -> str:
         return ("\n\n前回の出力:\n" + previous[:1500] +
                 "\n\n依頼者からの修正指示（最優先で反映）:\n" + item.get("revision_note", ""))
+
+    # -- storage hygiene ---------------------------------------------------
+    def cleanup_finals(self, biz: Row, report: RunReport) -> None:
+        """Delete full-size files nobody will publish any more.
+
+        A stock JPEG is ~1-2 MB and a Short ~5-15 MB; the free storage tier
+        is 1 GB. Previews stay as the record of what was made.
+        """
+        done = [i for i in self.store.items(biz["id"], statuses=CLEANUP_STATUSES, limit=200)
+                if i.get("final_path")]
+        if not done:
+            return
+        self.store.remove(FINALS, [i["final_path"] for i in done])
+        for i in done:
+            self.store.update_item(i["id"], {"final_path": ""})
+            report.cleaned += 1

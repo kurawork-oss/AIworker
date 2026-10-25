@@ -66,7 +66,6 @@ REQUIRED_NEGATIVES = ("text", "watermark", "logo", "brand", "real person")
 # title of at most 70 characters with no commas, a category number 1-21.
 MAX_KEYWORDS = 49
 MAX_TITLE = 70
-CLEANUP_STATUSES = ("published", "rejected", "cancelled", "failed")
 
 
 def _category(value: Any) -> int | None:
@@ -105,7 +104,7 @@ class StockPipeline(BusinessPipeline):
         return super().sample or bool(getattr(self.images, "is_sample", False))
 
     def work(self, biz: Row, acc: Row, cfg: dict[str, Any], report: RunReport) -> None:
-        self._cleanup(biz, report)
+        self.cleanup_finals(biz, report)
         self._retry(biz, acc, cfg, report)
         self._revise(biz, acc, cfg, report)
         for variant in self.plan(biz, cfg, self.room(biz, acc, cfg)):
@@ -266,19 +265,3 @@ class StockPipeline(BusinessPipeline):
         else:
             report.errors.append(f"画像生成（次回再試行）: {why[:120]}")
         self.store.update_item(item["id"], changes, expect_status="image_queued")
-
-    # -- storage hygiene ---------------------------------------------------
-    def _cleanup(self, biz: Row, report: RunReport) -> None:
-        """Delete full-size files nobody will upload any more.
-
-        Finals are ~1-2 MB; the free storage tier is 1 GB. Previews stay as
-        the record of what was made.
-        """
-        done = [i for i in self.store.items(biz["id"], statuses=CLEANUP_STATUSES, limit=200)
-                if i.get("final_path")]
-        if not done:
-            return
-        self.store.remove(FINALS, [i["final_path"] for i in done])
-        for i in done:
-            self.store.update_item(i["id"], {"final_path": ""})
-            report.cleaned += 1
