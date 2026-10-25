@@ -50,28 +50,49 @@ const id = (n) => `aaaaaaa${n}-0000-4000-8000-00000000000${n}`;
 const db = {
   controls: [],
   businesses: [{ id: "b1", owner_id: OWNER, code: "stock_images", name: "AI画像販売",
-    stage: "verifying", settings: {} }],
+    stage: "verifying", settings: {}, created_at: "2026-10-25T00:00:00Z" },
+    { id: "b2", owner_id: OWNER, code: "affiliate", name: "A8アフィリエイト",
+      stage: "verifying", settings: {}, created_at: "2026-10-25T00:00:01Z" }],
+  affiliate_programs: [],
   accounts: [{ id: "a1", owner_id: OWNER, business_id: "b1", platform: "adobe_stock",
     daily_limit: 1, approval_policy: "auto", publish_method: "manual", status: "active",
-    terms_status: "conditional", terms_source_url: "https://helpx.adobe.com/stock/" }],
+    terms_status: "conditional", terms_source_url: "https://helpx.adobe.com/stock/" },
+    { id: "a2", owner_id: OWNER, business_id: "b2", platform: "hatena_blog",
+      daily_limit: 1, approval_policy: "required", publish_method: "api", status: "active",
+      terms_status: "conditional", terms_source_url: "" }],
   items: [
-    { id: id(1), status: "pending_review", version: 2, title: "Calm gradient background",
+    { id: id(1), kind: "stock_image", status: "pending_review", version: 2, title: "Calm gradient background",
       body: "淡いグラデーション", is_sample: false, blocking: false,
       preview_path: `${OWNER}/${id(1)}/preview.jpg`, final_path: `${OWNER}/${id(1)}/final.jpg`,
       meta: { keywords: ["abstract", "gradient"], category: 8, prompt: "soft gradient" },
       policy_report: { findings: [] }, quality_report: { issues: [],
         needs_human: ["破綻（手指・文字化け・不自然な形状）の目視確認"] },
       created_at: "2026-10-25T01:00:00Z" },
-    { id: id(2), status: "blocked", version: 1, title: "Castle <script>alert(1)</script>",
+    { id: id(2), kind: "stock_image", status: "blocked", version: 1, title: "Castle <script>alert(1)</script>",
       body: "", is_sample: true, blocking: true, preview_path: "", final_path: "",
       meta: { keywords: [] }, policy_report: { blocking: true,
         findings: [{ detail: "著名な知的財産への言及があります" }] },
       quality_report: {}, created_at: "2026-10-25T02:00:00Z" },
-    { id: id(3), status: "awaiting_manual", version: 3, title: "Washi paper texture",
+    { id: id(3), kind: "stock_image", status: "awaiting_manual", version: 3, title: "Washi paper texture",
       body: "", is_sample: false, blocking: false,
       preview_path: `${OWNER}/${id(3)}/preview.jpg`, final_path: `${OWNER}/${id(3)}/final.jpg`,
       meta: { keywords: ["washi", "paper", "texture"], category: 8 },
       policy_report: {}, quality_report: {}, created_at: "2026-10-25T03:00:00Z" },
+    { id: id(4), kind: "note_article", status: "awaiting_manual", version: 2,
+      title: "AIで時短する3つの手順", is_sample: false, blocking: false,
+      body: "## はじめに\n\n本文です。**大事**なところ。\n\n- 手順1\n- 手順2\n\n※この記事はAIの支援を受けて作成しています。",
+      preview_path: "", final_path: "", meta: { price_hint_jpy: 300 },
+      policy_report: {}, quality_report: {}, created_at: "2026-10-25T04:00:00Z" },
+    { id: id(5), kind: "short_video", status: "awaiting_manual", version: 2,
+      title: "朝が変わる5分の小ワザ", body: "", is_sample: false, blocking: false,
+      preview_path: `${OWNER}/${id(5)}/preview.jpg`, final_path: `${OWNER}/${id(5)}/short.mp4`,
+      meta: { description: "毎朝の小さな工夫。\n#shorts", scenes: [{ narration: "窓を開けよう", caption: "窓" }] },
+      policy_report: {}, quality_report: {}, created_at: "2026-10-25T05:00:00Z" },
+    { id: id(6), kind: "affiliate_article", status: "pending_review", version: 1,
+      title: "テスト証券の選び方", is_sample: false, blocking: false, preview_path: "", final_path: "",
+      body: '※本記事はプロモーション（広告）を含みます。\n\n## 選び方\n\n<a href="https://px.a8.net/svt/ejp?a8mat=T" rel="nofollow sponsored noopener">テスト証券の公式サイトを見る</a><img src="https://www10.a8.net/0.gif?a8mat=T" alt="">\n\n<!-- aiw:abc -->',
+      meta: { program_name: "テスト証券" }, policy_report: {}, quality_report: {},
+      created_at: "2026-10-25T06:00:00Z" },
   ],
   workers: [{ id: "github-actions", last_seen_at: new Date(Date.now() - 3600e3).toISOString() }],
   events: [{ id: 1, level: "info", category: "pipeline", message: "AI画像販売: 新規 1 / 確認待ち 1",
@@ -91,6 +112,7 @@ function filterRows(rows, params) {
       const set = val.replace(/^\(|\)$/g, "").split(",").map((s) => s.replace(/"/g, ""));
       out = out.filter((r) => set.includes(String(r[k])));
     } else if (op === "gte") out = out.filter((r) => String(r[k] ?? "") >= val);
+    else if (op === "neq") out = out.filter((r) => String(r[k] ?? "") !== val);
   }
   const limit = params.get("limit");
   return limit ? out.slice(0, Number(limit)) : out;
@@ -113,7 +135,9 @@ function rpc(name, body) {
     it.status = { revise: "needs_revision", reject: "rejected", hold: "on_hold", resubmit: "pending_review" }[body.p_action];
     return { json: it };
   }
-  if (name === "mark_manual_done") { it.status = "published"; return { json: it }; }
+  if (name === "mark_manual_done") {
+    it.status = "published"; it.external_url = body.p_evidence; return { json: it };
+  }
   if (name === "set_global_stop") {
     if (body.p_stop && !body.p_reason.trim()) return fail("say why you are stopping");
     db.controls = [{ owner_id: OWNER, global_stop: body.p_stop, stop_reason: body.p_reason }];
@@ -158,8 +182,13 @@ async function api(route) {
   if (req.method() === "POST") {
     const row = req.postDataJSON();
     calls.push({ insert: table, row });
-    db[table].push(row);
+    db[table].push({ id: `new-${db[table].length}`, status: "active", ...row });
     return reply({ status: 201 });
+  }
+  if (req.method() === "DELETE") {
+    calls.push({ delete: table, ids: rows.map((r) => r.id) });
+    db[table] = db[table].filter((r) => !rows.includes(r));
+    return reply({ status: 204 });
   }
   return reply({ status: 405, json: { message: "unsupported" } });
 }
@@ -184,7 +213,8 @@ const browser = await chromium.launch();
 
 async function phone({ session = true, width = 390 } = {}) {
   const ctx = await browser.newContext({ viewport: { width, height: 844 }, deviceScaleFactor: 2,
-    acceptDownloads: true, locale: "ja-JP", timezoneId: "Asia/Tokyo" });
+    acceptDownloads: true, locale: "ja-JP", timezoneId: "Asia/Tokyo",
+    permissions: ["clipboard-read", "clipboard-write"] });
   if (session) {
     const jwt = ["e30", Buffer.from(JSON.stringify({ sub: OWNER, role: "authenticated",
       exp: 4102444800 })).toString("base64url"), "sig"].join(".");
@@ -220,8 +250,8 @@ try {
   page = await phone();
   await page.goto(base);
   await page.getByText("やること", { exact: true }).waitFor();
-  check(await page.getByText("確認待ち 2件").isVisible(), "home: review count");
-  check(await page.getByText("Adobe Stockへ提出 1件").isVisible(), "home: upload count");
+  check(await page.getByText("確認待ち 3件").isVisible(), "home: review count");
+  check(await page.getByText("投稿・提出待ち 3件").isVisible(), "home: posting count across businesses");
   check(await page.getByText("未入力").isVisible(), "home: no revenue says 未入力, not ¥0");
   check(await noSideScroll(page), "home: no horizontal scroll");
   await shot(page, "1-home");
@@ -255,9 +285,11 @@ try {
   check(true, "blocked: override without a reason is refused");
   await shot(page, "4-blocked");
 
-  await page.goto(base + "#/upload");
+  await page.goto(base + "#/post");
   await page.getByText("Washi paper texture").waitFor();
-  await shot(page, "5-upload");
+  check(await page.getByText("note（1件）").isVisible() && await page.getByText("YouTube ショート（1件）").isVisible(),
+    "post: a section per destination");
+  await shot(page, "5-post");
   const [download] = await Promise.all([page.waitForEvent("download"),
     page.getByRole("button", { name: "選んだ画像をZIPでダウンロード" }).click()]);
   const zipPath = await download.path();
@@ -281,7 +313,51 @@ try {
   await page.getByText("提出済みにしました").waitFor();
   check(calls.filter((c) => c.rpc === "mark_manual_done").length === 2, "upload: marks each item done");
 
+  // note: rich copy, then the URL is the evidence
+  await page.getByRole("button", { name: "本文をコピー" }).click();
+  await page.getByText("本文をコピーしました").waitFor();
+  const clip = await page.evaluate(() => navigator.clipboard.readText());
+  check(clip.includes("はじめに") && clip.includes("大事") && !clip.includes("<"), "note: body copied as text");
+  const notePosted = page.getByRole("button", { name: "投稿した" }).first();
+  await notePosted.click();
+  await page.getByText("公開したページのURL").waitFor();
+  check(true, "note: posting needs the page URL");
+  await page.locator(`#url-${id(4)}`).fill("https://note.com/me/n/abc");
+  await notePosted.click();
+  await page.getByText("公開済みにしました").waitFor();
+  check(calls.some((c) => c.rpc === "mark_manual_done" && c.body.p_evidence === "https://note.com/me/n/abc"),
+    "note: marked published with its URL");
+  // shorts: a download link to the signed video
+  const save = page.getByRole("link", { name: "動画を保存" });
+  check(await save.getAttribute("download") === "aiw-aaaaaaa5.mp4", "shorts: video download link");
+
+  await page.goto(base + `#/item/${id(6)}`);
+  await page.getByText("テスト証券の公式サイトを見る").waitFor();
+  check(await page.locator(".article a").count() === 0 && await page.locator(".article img").count() === 0,
+    "A8 detail: the article's link and pixel are shown as text, never live markup");
+
+  await page.goto(base + `#/item/${id(5)}`);
+  await page.locator("video.preview").waitFor();
+  check(true, "shorts detail: video player");
+
   await page.goto(base + "#/biz");
+  await page.getByRole("button", { name: "A8" }).click();
+  await page.getByText("提携している案件（A8）").waitFor();
+  await page.locator("#pname").fill("テスト証券");
+  await page.locator("#pad").fill('<a href="https://evil.example/x">x</a>');
+  await page.getByRole("button", { name: "登録する" }).click();
+  await page.getByText("A8の広告リンク（px.a8.net のURL）が見つかりません").waitFor();
+  check(true, "A8: a non-A8 link is refused");
+  await page.locator("#pad").fill('<a href="https://px.a8.net/svt/ejp?a8mat=ABC" rel="nofollow">広告</a><img border="0" width="1" height="1" src="https://www13.a8.net/0.gif?a8mat=ABC" alt=""><script>alert(1)</script>');
+  await page.locator("#pfacts").fill("口座開設は無料。");
+  await page.getByRole("button", { name: "登録する" }).click();
+  await page.getByText("案件を登録しました").waitFor();
+  const prog = calls.find((c) => c.insert === "affiliate_programs")?.row;
+  check(prog?.link_url === "https://px.a8.net/svt/ejp?a8mat=ABC" && prog.pixel_url.startsWith("https://www13.a8.net/")
+    && prog.facts === "口座開設は無料。" && !JSON.stringify(prog).includes("script"), "A8: only the link and pixel are kept");
+  await shot(page, "8-a8");
+  await page.getByRole("button", { name: "画像販売" }).click();
+  await page.getByText("Adobe Stock の設定").waitFor();
   await page.locator("#limit").fill("5");
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await page.getByText("保存しました").waitFor();
@@ -308,7 +384,7 @@ try {
   check(true, "log: events listed");
 
   const narrow = await phone({ width: 320 });
-  for (const h of ["#/", "#/review", `#/item/${id(1)}`, "#/upload", "#/biz"]) {
+  for (const h of ["#/", "#/review", `#/item/${id(1)}`, `#/item/${id(6)}`, "#/post", "#/biz"]) {
     await narrow.goto(base + h);
     await narrow.waitForSelector("main .card, main .empty, main .hero");
     check(await noSideScroll(narrow), `320px: no horizontal scroll on ${h}`);

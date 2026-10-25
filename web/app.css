@@ -19,7 +19,7 @@ ul.plain li{margin-bottom:3px}
 ul.plain.bad li{color:var(--critical)}
 details{margin-top:8px}
 summary{cursor:pointer;font-size:13px;color:var(--ink-2)}
-textarea,select,input[type=number],input[type=email],input[type=password],input[type=date]{
+textarea,select,input[type=number],input[type=email],input[type=password],input[type=date],input[type=url]{
   font:inherit;width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);
   background:var(--raise);color:var(--ink);min-height:44px}
 textarea{min-height:84px;resize:vertical}
@@ -38,3 +38,14 @@ textarea{min-height:84px;resize:vertical}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
 button[disabled]{opacity:.5;cursor:default}
+video.preview{aspect-ratio:9/16;max-height:72vh;background:#000;object-fit:contain}
+.article h2{font-size:17px;margin:18px 0 6px}
+.article h3{font-size:15px;margin:14px 0 4px}
+.article p,.article li{font-size:14px;line-height:1.8;margin:0 0 10px;overflow-wrap:anywhere}
+.article ul{padding-left:20px;margin:0 0 10px}
+.article hr{border:0;border-top:1px solid var(--line);margin:14px 0}
+button.chip{width:auto;min-height:34px;padding:6px 13px;font-weight:400;font-size:13px;border-radius:99px}
+button.chip[aria-current]{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:700}
+.pick input[type=url]{flex:1;min-width:0}
+.pick button{width:auto;flex:none}
+.three .btn,.three button{font-size:13px;padding:8px 6px}
