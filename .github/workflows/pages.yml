@@ -1,0 +1,63 @@
+name: app
+
+# Publishes the phone app (web/) to GitHub Pages.
+#
+# What is published is a login page and code -- no data. The project URL and
+# publishable key it carries are public by design; the database's row-level
+# security is what protects the data, and the build refuses a secret key.
+# Runs once the repository variables SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY
+# exist and Pages is set to deploy from GitHub Actions.
+
+on:
+  push:
+    paths:
+      - "web/**"
+      - "scripts/build_pwa.py"
+      - "src/aiworker/webui/theme.py"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: >-
+      github.ref_name == github.event.repository.default_branch
+      && vars.SUPABASE_URL != '' && vars.SUPABASE_PUBLISHABLE_KEY != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          pip install Pillow
+          python scripts/build_pwa.py --out dist/pwa
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/pwa
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

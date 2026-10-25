@@ -40,8 +40,6 @@ def dbname():
         c.execute((ROOT / "supabase/tests/local_supabase_stub.sql").read_text())
         for f in sorted((ROOT / "supabase/migrations").glob("*_core.sql")):
             c.execute(f.read_text())
-        c.execute("grant all on all tables in schema public to anon, authenticated, service_role")
-        c.execute("grant all on all sequences in schema public to anon, authenticated, service_role")
         c.execute("insert into auth.users(id) values (%s), (%s)", (OWNER, STRANGER))
         c.execute("insert into public.owners(user_id) values (%s)", (OWNER,))
     yield url
@@ -163,20 +161,23 @@ def test_a_stranger_cannot_store_their_own_rows_either(world):
 
 
 def test_anonymous_visitors_see_nothing(world):
+    """Not even an empty list: a signed-out visitor has no privilege at all."""
     new_item(world)
-    with As(world["url"], "anon") as s:
-        assert s.one("select count(*) from public.items")[0] == 0
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with As(world["url"], "anon") as s:
+            s.q("select count(*) from public.items")
 
 
 # --------------------------------------------------------------------------
 # approved has exactly one writer
 # --------------------------------------------------------------------------
 def test_the_owner_cannot_write_status_directly(world):
-    """No UPDATE policy on items: the browser cannot set a status, only call
-    the decision functions."""
+    """No UPDATE privilege on items at all: the browser cannot set a status,
+    only call the decision functions."""
     i = new_item(world)
-    with As(world["url"], "authenticated", OWNER) as s:
-        assert s.q("update public.items set status='approved' where id=%s", (i,)) == 0
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with As(world["url"], "authenticated", OWNER) as s:
+            s.q("update public.items set status='approved' where id=%s", (i,))
     assert item(world, i)["status"] == "pending_review"
 
 

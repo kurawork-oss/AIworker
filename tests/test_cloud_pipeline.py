@@ -452,8 +452,6 @@ class PgHarness:
             c.execute((ROOT / "supabase/tests/local_supabase_stub.sql").read_text())
             for f in sorted((ROOT / "supabase/migrations").glob("*_core.sql")):
                 c.execute(f.read_text())
-            c.execute("grant all on all tables in schema public to anon, authenticated, service_role")
-            c.execute("grant all on all sequences in schema public to anon, authenticated, service_role")
             c.execute("insert into auth.users(id) values (%s)", (self.owner,))
             c.execute("insert into public.owners(user_id) values (%s)", (self.owner,))
         self.admin = psycopg.connect(self.url, autocommit=True, row_factory=dict_row)

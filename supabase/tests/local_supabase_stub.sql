@@ -18,10 +18,9 @@ do $$ begin
   if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
 end $$;
 
--- Supabase grants table privileges to these roles by default and relies on
--- RLS to restrict them. Mirror that, so the tests exercise RLS rather than
--- missing grants.
+-- Behave like a NEW Supabase project: the roles can reach the schema, but
+-- nothing in it is granted automatically -- not even EXECUTE to PUBLIC. The
+-- migration must grant every privilege the app uses, and a missing one fails
+-- the tests here instead of the app in production.
 grant usage on schema public, auth to anon, authenticated, service_role;
-alter default privileges in schema public grant all on tables    to anon, authenticated, service_role;
-alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
-alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;
+alter default privileges in schema public revoke execute on functions from public;

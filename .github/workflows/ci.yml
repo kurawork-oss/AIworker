@@ -19,6 +19,18 @@ jobs:
   test:
     name: tests (py${{ matrix.python }})
     runs-on: ubuntu-latest
+    # A real PostgreSQL, so the v2 schema's rules are exercised as the real
+    # roles, and the cloud pipeline is run against them.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      AIWORKER_TEST_PG: postgresql://postgres@localhost:5432/postgres
     strategy:
       fail-fast: false
       matrix:
@@ -101,3 +113,33 @@ jobs:
 
       - name: Every screen renders
         run: python3 scripts/check_web_ui.py
+
+  pwa:
+    name: phone app in a browser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build against a fake project
+        env:
+          SUPABASE_URL: https://demo.supabase.co
+          SUPABASE_PUBLISHABLE_KEY: sb_publishable_demo
+        run: |
+          pip install Pillow
+          python scripts/build_pwa.py --out dist/pwa
+
+      - name: Install a browser
+        run: |
+          npm install --no-save --no-package-lock playwright@1.63.0
+          npx playwright install --with-deps chromium
+
+      - name: Every screen, every button
+        run: node scripts/check_pwa.mjs dist/pwa

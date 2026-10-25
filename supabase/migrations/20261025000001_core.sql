@@ -683,6 +683,30 @@ drop policy if exists revenue_owner_write on public.revenue_entries;
 create policy revenue_owner_write on public.revenue_entries for insert to authenticated
   with check (public.is_owner() and owner_id = auth.uid());
 
+-- Privileges. Supabase is moving new projects to grant nothing by default
+-- (Data API exposure becomes opt-in), so every grant the app relies on is
+-- stated here rather than inherited, and the schema behaves the same on an
+-- old project and a new one. `anon` gets nothing: there is no signed-out data.
+revoke all on all tables    in schema public from anon, authenticated, service_role;
+revoke all on all functions in schema public from public, anon, authenticated, service_role;
+
+-- The owner's browser reads everything of theirs (RLS narrows it to their
+-- rows), edits settings, and records revenue. It cannot write items,
+-- approvals, controls, jobs or events at all -- not even rows RLS would let
+-- through -- because those change only through the functions below.
+grant select on public.owners, public.item_transitions, public.settings_versions,
+                public.items, public.approvals, public.controls, public.workers,
+                public.jobs, public.events                         to authenticated;
+grant select, insert, update, delete on public.businesses, public.accounts to authenticated;
+grant select, insert on public.revenue_entries                     to authenticated;
+
+-- The pipeline (secret key). Trusted, but still cannot make anything
+-- `approved` except through approve_item(), which the item trigger enforces.
+grant select, insert, update, delete on all tables in schema public to service_role;
+grant usage, select on all sequences in schema public              to service_role;
+
+grant execute on function public.is_owner() to authenticated, service_role;
+
 -- Functions callable from the browser.
 revoke all on function public.approve_item(uuid,int,text,boolean)  from public;
 revoke all on function public.decide_item(uuid,text,int,text)      from public;
