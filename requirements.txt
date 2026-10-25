@@ -3,3 +3,4 @@
 # deliberately depends on the Python standard library + PyYAML only, so it can
 # run on a free-tier VPS or a laptop with no build toolchain.
 PyYAML>=6.0
+Pillow>=10       # image checks and upscaling to the stock-site minimum

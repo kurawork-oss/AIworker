@@ -61,6 +61,8 @@ class ImageProvider(Protocol):
     name: str
     #: Roughly what one image costs, for the report. 0.0 for free backends.
     cost_per_image_usd: float
+    #: True for test output that must never be counted as real work.
+    is_sample: bool
 
     def generate(self, request: ImageRequest) -> ImageResult:
         ...
@@ -86,17 +88,45 @@ def _solid_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
 
 
 class MockImageProvider:
-    """Offline placeholder. Obviously not publishable, which is the point."""
+    """Offline stand-in: a 1024x1024 striped test card.
+
+    Full size on purpose, so the rest of the pipeline (upscaling, checks,
+    storage) runs for real in tests and dry runs. Obviously not artwork -- and
+    items made with it are flagged `is_sample`, so the app never counts them
+    as real output (要件 §1 実績とサンプルを区別).
+    """
 
     name = "mock"
     cost_per_image_usd = 0.0
+    is_sample = True
 
     def generate(self, request: ImageRequest) -> ImageResult:
         seed = request.seed if request.seed is not None else abs(hash(request.prompt))
-        rgb = ((seed * 37) % 200 + 40, (seed * 71) % 200 + 40, (seed * 113) % 200 + 40)
-        # Small on purpose: a mock must never be mistaken for a sellable asset.
-        return ImageResult(True, _solid_png(64, 64, rgb),
-                           message="mock: placeholder image, not publishable")
+        a = ((seed * 37) % 80 + 170, (seed * 71) % 80 + 170, (seed * 113) % 80 + 170)
+        # Light vs dark, not complementary: complementary colours often share
+        # almost the same luminance and the flat-image check rightly rejects them.
+        b = tuple(c // 4 for c in a)
+        size, band = 1024, 48 + seed % 32
+        # One wide row of diagonal stripes, sliced per row: fast without numpy.
+        period = []
+        for x in range(band * 2):
+            period.extend(a if x < band else b)
+        wide = bytes(period) * ((size * 2) // (band * 2) + 2)
+        rows = []
+        for y in range(size):
+            off = (y % (band * 2)) * 3
+            rows.append(b"\x00" + wide[off: off + size * 3])
+        raw = b"".join(rows)
+
+        def chunk(tag: bytes, payload: bytes) -> bytes:
+            return (struct.pack(">I", len(payload)) + tag + payload
+                    + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
+
+        png = (b"\x89PNG\r\n\x1a\n"
+               + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+               + chunk(b"IDAT", zlib.compress(raw, 6))
+               + chunk(b"IEND", b""))
+        return ImageResult(True, png, message="mock: サンプル画像（公開不可）")
 
 
 # --------------------------------------------------------------------------
@@ -110,6 +140,7 @@ class CloudflareImageProvider:
 
     name = "cloudflare"
     cost_per_image_usd = 0.0
+    is_sample = False
     DEFAULT_MODEL = "@cf/black-forest-labs/flux-1-schnell"
 
     def __init__(self, model: str = "", timeout: int = 120):
@@ -172,6 +203,7 @@ class LocalImageProvider:
 
     name = "local"
     cost_per_image_usd = 0.0
+    is_sample = False
 
     def __init__(self, endpoint: str = "", timeout: int = 300):
         self.endpoint = endpoint or os.environ.get(
