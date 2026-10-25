@@ -78,3 +78,23 @@ def test_mock_backend_is_free(conn, settings, tmp_path):
     settings.state_dir = tmp_path
     _approved_stock(conn, settings, 2)
     assert imagegen.generate(conn, settings).cost_usd == 0.0
+
+
+def test_a_rejected_cloudflare_token_is_a_configuration_error(monkeypatch):
+    """Every image would fail the same way: stop the run, do not burn retries."""
+    import io
+    import urllib.error
+
+    from aiworker.core.errors import ConfigError
+    from aiworker.imagegen.providers import CloudflareImageProvider, ImageRequest
+
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "tok")
+
+    def refuse(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {},
+                                     io.BytesIO(b'{"errors":[{"message":"Authentication error"}]}'))
+
+    monkeypatch.setattr("urllib.request.urlopen", refuse)
+    with pytest.raises(ConfigError, match="401"):
+        CloudflareImageProvider().generate(ImageRequest(prompt="x"))

@@ -173,6 +173,12 @@ class CloudflareImageProvider:
             text = exc.read().decode("utf-8", "replace")[:300]
             if exc.code in (408, 429) or exc.code >= 500:
                 raise TransientError(f"Cloudflare {exc.code}: {text}") from exc
+            if exc.code in (401, 403):
+                # A wrong or revoked token fails every image the same way:
+                # stop the run (and tell the owner) rather than burn retries.
+                raise ConfigError(
+                    f"Cloudflare {exc.code}: CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID "
+                    "が無効か、Workers AI の権限がありません") from None
             return ImageResult(False, message=f"Cloudflare {exc.code}: {text}")
         except urllib.error.URLError as exc:
             raise TransientError(f"Cloudflare に到達できません: {exc}") from exc

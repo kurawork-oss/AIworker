@@ -10,6 +10,42 @@ schedules. It exists to make platform bans *unlikely*, so most of the design
 decisions here trade throughput for safety. Read `docs/01-architecture.md`
 before changing anything in `guard/`, `approval/` or `scheduler/`.
 
+## Two generations in one repository
+
+**v2 (current, cloud, see `docs/11-v2-architecture.md`)** — runs with no
+machine of the owner's switched on:
+
+- `supabase/migrations/` — Postgres schema. **The safety rules live here**, not
+  in any client: only `approve_item()` can make an item `approved`; legal status
+  moves are a table; a content edit bumps `version` and invalidates approval;
+  samples are never auto-approved or put on the upload list; the browser has no
+  write privilege on items/approvals/controls/jobs/events at all. Every grant is
+  explicit (new Supabase projects grant nothing by default).
+- `src/aiworker/cloud/` — the scheduled pipeline (`python -m aiworker.cloud run`,
+  GitHub Actions `pipeline.yml`). Talks to a `Store`; `RestStore` is Supabase,
+  `MemoryStore` is tests and `demo`. Logs counts only: Actions logs are public.
+- `web/` — the phone PWA (GitHub Pages, `pages.yml`), publishable key only.
+  `scripts/build_pwa.py` builds it (and refuses a secret key);
+  `scripts/check_pwa.mjs` drives every screen against a fake Supabase.
+
+v2 commands:
+
+```bash
+# schema + pipeline against real PostgreSQL (CI uses a service container)
+AIWORKER_TEST_PG='postgresql://postgres@/postgres?host=/var/tmp&port=54329' python -m pytest tests/test_supabase_schema.py tests/test_cloud_pipeline.py
+python -m aiworker.cloud demo --out var/demo        # offline run, writes previews
+SUPABASE_URL=https://demo.supabase.co SUPABASE_PUBLISHABLE_KEY=sb_publishable_demo \
+  python scripts/build_pwa.py --out dist/pwa && node scripts/check_pwa.mjs dist/pwa
+```
+
+`supabase/tests/local_supabase_stub.sql` stands in for Supabase's auth schema
+and roles in tests and behaves like a *new* project (no automatic grants).
+Never apply it to a real project.
+
+**v1 (below, local SQLite engine)** — the original CLI/web pipeline. Its
+guardrails (`guard/`), prompts (`generators/`) and image tools (`imagegen/`)
+are reused by v2; its scheduler/publishers/approval service are not.
+
 ## Commands
 
 ```bash

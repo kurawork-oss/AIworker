@@ -186,6 +186,11 @@ class StockPipeline:
         if acc.get("status") != "active":
             report.stopped = "アカウントが停止中"
             return report
+        # 要件 受入条件7: terms nobody has checked (or that forbid this use)
+        # stop the work, rather than producing things that cannot be used.
+        if acc.get("terms_status") in ("unverified", "forbidden"):
+            report.stopped = "規約が未確認または不可のアカウント"
+            return report
         cfg = self.settings(biz)
 
         try:

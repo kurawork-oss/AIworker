@@ -242,6 +242,20 @@ def test_global_stop_does_nothing_at_all(h):
     assert len(h.all_items()) == 1
 
 
+def test_pausing_the_account_stops_its_work(h):
+    run(h)
+    h.set_account(status="paused", daily_limit=5)
+    report = run(h, seed=8)
+    assert report.stopped and len(h.all_items()) == 1
+
+
+def test_unchecked_terms_stop_the_work(h):
+    run(h)
+    h.set_account(terms_status="unverified", daily_limit=5)
+    report = run(h, seed=8)
+    assert "規約" in report.stopped and len(h.all_items()) == 1
+
+
 def test_logs_carry_counts_not_content(h):
     run(h)
     text = json.dumps([e for e in h.events() if e["category"] == "pipeline"], ensure_ascii=False)
