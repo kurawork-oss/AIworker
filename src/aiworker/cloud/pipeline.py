@@ -83,8 +83,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 }
 
 REQUIRED_NEGATIVES = ("text", "watermark", "logo", "brand", "real person")
-# Adobe Stock accepts at most 49 keywords and ranks by the first ten.
+# Adobe Stock's CSV upload: at most 49 keywords (ranked by the first ten), a
+# title of at most 70 characters with no commas, a category number 1-21.
 MAX_KEYWORDS = 49
+MAX_TITLE = 70
 CLEANUP_STATUSES = ("published", "rejected", "cancelled", "failed")
 
 
@@ -114,6 +116,14 @@ class RunReport:
                 f"自動承認 {self.auto_approved} / ブロック {self.blocked} / "
                 f"修正 {self.revised} / 再試行 {self.retried} / 失敗 {self.failed} / "
                 f"整理 {self.cleaned} / エラー {len(self.errors)}")
+
+
+def _category(value: Any) -> int | None:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if 1 <= n <= 21 else None
 
 
 def _iso(d: dt.datetime) -> str:
@@ -251,10 +261,13 @@ class StockPipeline:
             "keywords": keywords[:MAX_KEYWORDS],
             "description": str(raw.get("description") or "").strip(),
             "ai_generated": True,
+            "category": _category(raw.get("category")),
             "generator": self.llm.name, "image_backend": self.images.name,
             "image_attempts": 0,
         }
-        title = str(raw.get("title") or "").strip()[:200]
+        title = " ".join(str(raw.get("title") or "").replace(",", " ").split())
+        if len(title) > MAX_TITLE:
+            title = title[:MAX_TITLE].rsplit(" ", 1)[0]
         body = str(raw.get("body") or "").strip()
         return title, body, meta
 

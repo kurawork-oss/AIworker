@@ -183,6 +183,7 @@ class MockProvider:
                 "negative_prompt": "text, watermark, logo, brand, celebrity, real person, signature",
                 "keywords": kws,
                 "description": f"{theme} concept background with copy space.",
+                "category": 8,
                 "ai_generated": True,
             }
 

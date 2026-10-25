@@ -130,11 +130,19 @@ SPECS: dict[str, ChannelSpec] = {
             "ストックサイト投稿用の生成プロンプトとメタデータを作ってください。\n"
             "- prompt には実在人物・ブランド・ロゴ・文字を含めない。\n"
             "- negative_prompt に text, watermark, logo, brand, real person を必ず含める。\n"
-            "- keywords は英語で10〜20個、重複と過剰な一般語を避ける。\n"
+            "- keywords は英語で15〜30個、重要な順に並べる（先頭10個が検索で最も効く）。"
+            "重複と過剰な一般語を避ける。\n"
+            "- title は英語で70文字以内、カンマを使わず、画像の内容をそのまま説明する。\n"
+            "- category は Adobe Stock のカテゴリ番号を1つ: 1 Animals, 2 Buildings and "
+            "Architecture, 3 Business, 4 Drinks, 5 The Environment, 6 States of Mind, 7 Food, "
+            "8 Graphic Resources, 9 Hobbies and Leisure, 10 Industry, 11 Landscapes, "
+            "12 Lifestyle, 13 People, 14 Plants and Flowers, 15 Culture and Religion, "
+            "16 Science, 17 Social Issues, 18 Sports, 19 Technology, 20 Transport, 21 Travel。\n"
             "- description は英語で1〜2文。"
         ),
         schema={
-            "title": "string (英語の素材タイトル)",
+            "title": "string (英語の素材タイトル、70文字以内、カンマなし)",
+            "category": "number (Adobe Stockのカテゴリ番号 1〜21)",
             "body": "string (日本語の素材メモ)",
             "prompt": "string (英語の生成プロンプト)",
             "negative_prompt": "string",
@@ -142,7 +150,8 @@ SPECS: dict[str, ChannelSpec] = {
             "description": "string (英語)",
             "ai_generated": "boolean (常にtrue)",
         },
-        meta_keys=("prompt", "negative_prompt", "keywords", "description", "ai_generated"),
+        meta_keys=("prompt", "negative_prompt", "keywords", "description", "ai_generated",
+                   "category"),
         default_platforms=("adobe_stock",),
     ),
     Channel.DIGITAL_PRODUCT.value: ChannelSpec(

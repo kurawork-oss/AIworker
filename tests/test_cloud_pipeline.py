@@ -171,6 +171,16 @@ def test_metadata_is_tidied_for_adobe(h):
     for must in ("text", "watermark", "logo", "brand", "real person"):
         assert must in meta["negative_prompt"]
     assert meta["ai_generated"] is True
+    assert meta["category"] is None  # the fake model gave none: left blank, not guessed
+
+
+def test_titles_and_categories_fit_adobes_csv(h):
+    long = "Soft pastel gradient, abstract background with generous copy space for banners"
+    run(h, llm=FakeLLM(title=long, category="8"))
+    [item] = h.all_items()
+    assert "," not in item["title"] and len(item["title"]) <= 70
+    assert item["title"].startswith("Soft pastel gradient abstract")
+    assert item["meta"]["category"] == 8
 
 
 def test_the_daily_limit_is_the_owners_publication_budget(h):
