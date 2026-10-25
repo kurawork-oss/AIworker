@@ -21,9 +21,16 @@ machine of the owner's switched on:
   samples are never auto-approved or put on the upload list; the browser has no
   write privilege on items/approvals/controls/jobs/events at all. Every grant is
   explicit (new Supabase projects grant nothing by default).
-- `src/aiworker/cloud/` — the scheduled pipeline (`python -m aiworker.cloud run`,
-  GitHub Actions `pipeline.yml`). Talks to a `Store`; `RestStore` is Supabase,
-  `MemoryStore` is tests and `demo`. Logs counts only: Actions logs are public.
+- `src/aiworker/cloud/` — the scheduled pipelines (`python -m aiworker.cloud run`,
+  GitHub Actions `pipeline.yml`; Shorts in `shorts.yml` with a VOICEVOX service
+  container). `base.py` holds the rules every business shares (stops, volume,
+  variety, approval only via `approve_item()`); one module per business:
+  `pipeline.py` (Adobe Stock images), `articles.py` (note; A8 articles posted to
+  Hatena Blog by `hatena.py`, exactly once via an in-article marker),
+  `shorts.py` + `tts.py` + `video.py` (ffmpeg). Talks to a `Store`;
+  `RestStore` is Supabase, `MemoryStore` is tests and `demo`. Logs counts
+  only: Actions logs are public. Cloud tests run on both stores via
+  `tests/cloud_harness.py`.
 - `web/` — the phone PWA (GitHub Pages, `pages.yml`), publishable key only.
   `scripts/build_pwa.py` builds it (and refuses a secret key);
   `scripts/check_pwa.mjs` drives every screen against a fake Supabase.
