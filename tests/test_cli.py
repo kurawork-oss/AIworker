@@ -81,7 +81,12 @@ def test_review_show_reports_missing_items(tmp_path):
 
 
 def test_revenue_add_and_report(tmp_path, capsys):
-    assert run(tmp_path, "revenue", "add", "--date", "2026-09-15", "--source", "a8",
+    # Today, not a fixed date: `report --days 30` looks back from the real
+    # clock, so a hard-coded date silently ages out of the window.
+    import datetime as _dt
+
+    today = _dt.date.today().isoformat()
+    assert run(tmp_path, "revenue", "add", "--date", today, "--source", "a8",
                "--amount", "1500") == 0
     capsys.readouterr()
     assert run(tmp_path, "report", "--days", "30") == 0
