@@ -66,7 +66,29 @@ def plan_variants(
     rng: random.Random | None = None,
     cooldown: int = 60,
 ) -> list[Variant]:
-    """Choose ``count`` distinct (theme, angle, tone) combinations.
+    """Choose ``count`` distinct (theme, angle, tone) combinations for a
+    channel, steering away from what the local database used recently."""
+    return choose_variants(
+        count,
+        used_combo=recent_combinations(conn, channel, lookback=cooldown),
+        used_theme=recent_axis(conn, channel, "theme"),
+        used_angle=recent_axis(conn, channel, "angle"),
+        themes=themes, angles=angles, tones=tones, rng=rng,
+    )
+
+
+def choose_variants(
+    count: int,
+    *,
+    used_combo: Counter[str],
+    used_theme: Counter[str],
+    used_angle: Counter[str],
+    themes: list[str],
+    angles: list[str] | None = None,
+    tones: list[str] | None = None,
+    rng: random.Random | None = None,
+) -> list[Variant]:
+    """The storage-free core of :func:`plan_variants`.
 
     Scoring is "least recently / least often used wins", with a random
     tiebreak so two runs on the same day do not produce the same order.
@@ -75,10 +97,6 @@ def plan_variants(
     themes = [t for t in (themes or []) if t] or ["AI活用"]
     angles = [a for a in (angles or DEFAULT_ANGLES) if a] or DEFAULT_ANGLES
     tones = [t for t in (tones or DEFAULT_TONES) if t] or DEFAULT_TONES
-
-    used_combo = recent_combinations(conn, channel, lookback=cooldown)
-    used_theme = recent_axis(conn, channel, "theme")
-    used_angle = recent_axis(conn, channel, "angle")
 
     candidates: list[tuple[float, Variant]] = []
     for theme in themes:

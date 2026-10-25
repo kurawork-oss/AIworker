@@ -489,6 +489,11 @@ begin
     if p_force then
       raise exception 'the service role cannot force an approval' using errcode = 'insufficient_privilege';
     end if;
+    -- Test output made with a stand-in generator is never real work (要件 §1
+    -- 実績とサンプルを区別): only a person may approve it, to try the flow.
+    if it.is_sample then
+      raise exception 'a sample cannot be auto-approved' using errcode = 'insufficient_privilege';
+    end if;
     act := 'auto_approve';
   elsif it.blocking or it.status = 'blocked' then
     if not p_force then
@@ -514,7 +519,9 @@ begin
   -- The finished file already exists and a person publishes it by hand: move
   -- it straight onto their to-do list, rather than leaving it "approved"
   -- until the next scheduled run notices.
-  if it.final_path <> '' and coalesce(acc.publish_method, 'manual') = 'manual' then
+  -- A sample stays merely "approved": it must never show up as an upload task.
+  if it.final_path <> '' and not it.is_sample
+     and coalesce(acc.publish_method, 'manual') = 'manual' then
     update public.items set status = 'awaiting_manual' where id = p_item
     returning * into it;
   end if;

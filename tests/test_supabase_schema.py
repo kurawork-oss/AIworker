@@ -281,6 +281,26 @@ def test_the_pipeline_cannot_force(world):
             s.q("select public.approve_item(%s, 1, 'trust me', true)", (i,))
 
 
+def test_the_pipeline_cannot_auto_approve_a_sample(world):
+    """Output from a stand-in generator is never real work."""
+    i = new_item(world, account="auto", status="checking")
+    with admin(world["url"]) as c:
+        c.execute("update public.items set is_sample=true where id=%s", (i,))
+    with pytest.raises(psycopg.errors.InsufficientPrivilege, match="sample"):
+        with As(world["url"], "service_role") as s:
+            s.q("select public.approve_item(%s, 1, '', false)", (i,))
+
+
+def test_a_sample_a_person_approves_never_becomes_an_upload_task(world):
+    i = new_item(world, status="checking")
+    with admin(world["url"]) as c:
+        c.execute("update public.items set is_sample=true, final_path='o/i/final.jpg' "
+                  "where id=%s", (i,))
+    with As(world["url"], "authenticated", OWNER) as s:
+        s.q("select public.approve_item(%s, 1, '', false)", (i,))
+    assert item(world, i)["status"] == "approved"
+
+
 def test_global_stop_halts_auto_approval(world):
     i = new_item(world, account="auto", status="checking")
     with As(world["url"], "authenticated", OWNER) as s:
