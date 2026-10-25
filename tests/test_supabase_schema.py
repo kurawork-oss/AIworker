@@ -460,3 +460,16 @@ def test_daily_limit_has_a_sanity_ceiling(world):
     with pytest.raises(psycopg.errors.CheckViolation):
         with As(world["url"], "authenticated", OWNER) as s:
             s.q("update public.accounts set daily_limit = 500 where id=%s", (world["manual"],))
+
+
+def test_approving_an_item_with_a_finished_file_puts_it_on_the_upload_list(world):
+    """Approve on the phone, and it is immediately waiting to be uploaded --
+    not parked as 'approved' until the next scheduled run."""
+    i = new_item(world, status="checking")
+    with admin(world["url"]) as c:
+        c.execute("update public.items set final_path='o/i/final.jpg' where id=%s", (i,))
+    with As(world["url"], "authenticated", OWNER) as s:
+        s.q("select public.approve_item(%s, 1, '', false)", (i,))
+    row = item(world, i)
+    assert row["status"] == "awaiting_manual"
+    assert row["approved_version"] == row["version"]

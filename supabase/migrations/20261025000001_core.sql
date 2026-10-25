@@ -511,6 +511,14 @@ begin
   returning * into it;
   perform set_config('aiworker.via_approval', 'off', true);
 
+  -- The finished file already exists and a person publishes it by hand: move
+  -- it straight onto their to-do list, rather than leaving it "approved"
+  -- until the next scheduled run notices.
+  if it.final_path <> '' and coalesce(acc.publish_method, 'manual') = 'manual' then
+    update public.items set status = 'awaiting_manual' where id = p_item
+    returning * into it;
+  end if;
+
   insert into public.approvals(owner_id, item_id, item_version, action, actor, note)
   values (it.owner_id, it.id, it.version, act,
           case when is_auto then 'auto' else public._actor() end, coalesce(p_note, ''));
